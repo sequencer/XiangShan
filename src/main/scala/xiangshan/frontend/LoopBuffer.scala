@@ -65,7 +65,8 @@ class LoopBuffer extends XSModule {
   }
 
   def isJal(inst: UInt): Bool = {
-    inst === BitPat("b????????????????????_?????_1101111") || inst === BitPat("b???????_?????_?????_???_?????_1100011")
+//    inst === BitPat("b????????????????????_?????_1101111") || inst === BitPat("b???????_?????_?????_???_?????_1100011")
+    false.B
   }
 
   // Loop Buffer define
@@ -87,6 +88,11 @@ class LoopBuffer extends XSModule {
   def isFull(ptr1: UInt, ptr2: UInt): Bool = ptr1 === ptr2 && lbuf(ptr2).valid
   def isEmpty(ptr1: UInt, ptr2: UInt): Bool = ptr1 === ptr2 && !lbuf(ptr1).valid
   def isOverflow(ptr: UInt): Bool = lbuf(ptr).valid
+//  val hasSBB = (0 until DecodeWidth).map(i => lbuf(head_ptr + i.U).pc === tsbbPC && lbuf(head_ptr + i.U).valid).reduce(_||_)
+//  val tsbbIdx = OHToUInt((0 until DecodeWidth).map(i => lbuf(head_ptr + i.U).pc === tsbbPC))
+  val hasSBB = (0 until DecodeWidth).map(i => lbuf(head_ptr + i.U).valid && isSBB(lbuf(head_ptr + i.U).inst)).reduce(_||_)
+  val sbbIdx = OHToUInt((0 until DecodeWidth).map(i => isSBB(lbuf(head_ptr + i.U).inst)))
+  val sbbTaken = lbuf(head_ptr + sbbIdx).isTaken
 
   val s_idle :: s_fill :: s_active :: Nil = Enum(3)
   val LBstate = RegInit(s_idle)
@@ -106,16 +112,21 @@ class LoopBuffer extends XSModule {
 
     head_ptr := head_ptr + deq_idx
   }.otherwise {
+    deq_idx = 0.U
     for(i <- 0 until DecodeWidth) {
-      io.out(i).valid := Mux(deq_idx === DecodeWidth.U, false.B, lbuf(loop_ptr + deq_idx).valid)
+//      io.out(i).valid := Mux(deq_idx === DecodeWidth.U, false.B, lbuf(loop_ptr + deq_idx).valid)
+      XSDebug("loop_ptr=%d + %d\n", loop_ptr, deq_idx)
+      io.out(i).valid := deq_idx =/= DecodeWidth.U
       io.out(i).bits.instr := lbuf(loop_ptr + deq_idx).inst
       io.out(i).bits.pc := lbuf(loop_ptr + deq_idx).pc
       io.out(i).bits.isRVC := DontCare
 
-      deq_idx = Mux(loop_ptr + deq_idx === loop_end, DecodeWidth.U, deq_idx + 1.U)
+      deq_idx = Mux(deq_idx === DecodeWidth.U || loop_ptr + deq_idx === loop_end, DecodeWidth.U, deq_idx + 1.U)
     }
 
     loop_ptr := Mux(deq_idx === DecodeWidth.U, loop_str, loop_ptr + deq_idx)
+    XSDebug("deq_idx = %d\n", deq_idx)
+    XSDebug("loop_ptr = %d\n", Mux(deq_idx === DecodeWidth.U, loop_str, loop_ptr + deq_idx))
   }
 
   val countRegWire = countReg + (PopCount((0 until DecodeWidth).map(io.out(_).fire())) << 2).asUInt
@@ -129,7 +140,7 @@ class LoopBuffer extends XSModule {
   when(io.in.fire() && LBstate =/= s_active){
     for(i <- 0 until FetchWidth) {
       lbuf(tail_ptr + enq_idx).inst := io.in.bits.instrs(i)
-      lbuf(tail_ptr + enq_idx).pc := io.in.bits.pc + (i<<2).U
+      lbuf(tail_ptr + enq_idx).pc := io.in.bits.pc + (enq_idx << 2).asUInt
       lbuf(tail_ptr + enq_idx).valid := io.in.bits.mask(i<<1) && io.redirect.instrValid(i)
       lbuf(tail_ptr + enq_idx).isTaken := io.redirect.redirect
 
@@ -143,29 +154,52 @@ class LoopBuffer extends XSModule {
     is(s_idle) {
       // To FILL
       // 检测到sbb且跳转，sbb成为triggrting sbb
-      for(i <- 0 until DecodeWidth) {
-        val issbb = isSBB(io.out(i).bits.instr)
-        val sbbOffset = SBBOffset(io.out(i).bits.instr)
-        when(issbb && lbuf(head_ptr + i.U).isTaken) {
-          LBstate := s_fill
-          XSDebug("State change: FILL\n")
-          countReg := Cat("b1".U, sbbOffset)
-          tsbbPC := io.out(i).bits.pc
-          loop_str := head_ptr + deq_idx
-        }
+//      for(i <- 0 until DecodeWidth) {
+//        val issbb = isSBB(io.out(i).bits.instr) && io.out(i).valid
+//        val sbbOffset = SBBOffset(io.out(i).bits.instr)
+//        when(issbb && lbuf(head_ptr + i.U).isTaken) {
+//          LBstate := s_fill
+//          XSDebug("State change: FILL\n")
+//          countReg := Cat("b1".U, sbbOffset)
+//          tsbbPC := io.out(i).bits.pc
+//          loop_str := head_ptr + i.U + 1.U
+//          XSDebug("loop_str=%d\n", head_ptr + i.U + 1.U)
+//        }
+//      }
+
+      when(hasSBB && sbbTaken) {
+        LBstate := s_fill
+        XSDebug("State change: FILL\n")
+        countReg := Cat("b1".U, SBBOffset(lbuf(head_ptr + sbbIdx).inst))
+        tsbbPC := lbuf(head_ptr + sbbIdx).pc
+        loop_str := head_ptr + sbbIdx + 1.U
+        XSDebug("loop_str=%d\n", head_ptr + sbbIdx + 1.U)
       }
+//      when(io.in.fire()) {
+//        for (i <- 0 until FetchWidth) {
+//          val issbb = isSBB(io.in.bits.instrs(i)) && io.in.bits.mask(i<<1) && io.redirect.instrValid(i)
+//          val sbbOffset = SBBOffset(io.in.bits.instrs(i))
+//          when(issbb && io.redirect.redirect) {
+//            LBstate := s_fill
+//            XSDebug("State change: FILL\n")
+//            countReg := Cat("b1".U, sbbOffset)
+//            tsbbPC := io.in.bits.pc + ((enq_idx-1.U) << 2).asUInt
+//            XSDebug("tsbb pc = %x\n", io.in.bits.pc + ((enq_idx-1.U) << 2).asUInt)
+//            loop_str := tail_ptr + enq_idx
+//          }
+//        }
+//      }
     }
     is(s_fill) {
-      when(countRegWire.head(1) === 0.U){
-        when((0 until DecodeWidth).map(i => io.out(i).bits.pc === tsbbPC).reduce(_||_)) {
-          val tsbbIdx = DecodeWidth.U - OHToUInt((0 until DecodeWidth).map(i => io.out(i).bits.pc === tsbbPC)) - 1.U
-          when(lbuf(head_ptr + tsbbIdx).isTaken) {
+      when(countRegWire.head(1) === 0.U) {
+        when(hasSBB && lbuf(head_ptr + sbbIdx).pc === tsbbPC) {
+          when(lbuf(head_ptr + sbbIdx).isTaken) {
             // To ACTIVE
             // triggering sbb造成cof
             LBstate := s_active
             XSDebug("State change: ACTIVE\n")
-            loop_end := head_ptr + tsbbIdx
-            XSDebug("loop_end=%d\n", head_ptr + tsbbIdx)
+            loop_end := head_ptr + sbbIdx
+            XSDebug("loop_end=%d\n", head_ptr + sbbIdx)
             loop_ptr := loop_str
           }.otherwise {
             // triggering sbb不跳转
@@ -189,16 +223,19 @@ class LoopBuffer extends XSModule {
     is(s_active) {
       // To IDLE
       // triggering sbb不跳转 或 非triggering sbb造成的cof
-      when((0 until DecodeWidth).map(i => io.out(i).bits.pc === tsbbPC && !lbuf(tail_ptr + i.U).isTaken).reduce(_||_)) {
+      for(i <- 0 until DecodeWidth) {
+        printf("pc= %x, isTaken= %b\n", io.out(i).bits.pc, lbuf(loop_ptr + i.U).isTaken)
+      }
+      when((0 until DecodeWidth).map(i => io.out(i).bits.pc === tsbbPC && !lbuf(loop_ptr + i.U).isTaken).reduce(_||_)) {
         // To IDLE
         LBstate := s_idle
-        XSDebug("State change: IDLE\n")
+        XSDebug("tsbb not taken, State change: IDLE\n")
       }
 
-      when((0 until DecodeWidth).map(i => isJal(io.out(i).bits.instr) && lbuf(tail_ptr + i.U).isTaken).reduce(_||_)) {
+      when((0 until DecodeWidth).map(i => isJal(io.out(i).bits.instr) && lbuf(loop_ptr + i.U).isTaken).reduce(_||_)) {
         // To IDLE
         LBstate := s_idle
-        XSDebug("State change: IDLE\n")
+        XSDebug("cof by other inst, State change: IDLE\n")
       }
 
       // To ACTIVE
