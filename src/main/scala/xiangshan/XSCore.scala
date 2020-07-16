@@ -7,8 +7,8 @@ import noop.{Cache, CacheConfig, HasExceptionNO, TLB, TLBConfig}
 import xiangshan.backend._
 import xiangshan.backend.dispatch.DP1Parameters
 import xiangshan.backend.exu.ExuParameters
-import xiangshan.frontend.Frontend
-import xiangshan.utils._
+import xiangshan.frontend._
+import utils._
 
 trait HasXSParameter {
   val XLEN = 64
@@ -26,6 +26,17 @@ trait HasXSParameter {
   val DataBytes = DataBits / 8
   val HasFPU = true
   val FetchWidth = 8
+  val PredictWidth = FetchWidth * 2
+  val EnableBPU = true
+  val EnableBPD = false // enable backing predictor(like Tage) in BPUStage3
+  val HistoryLength = 64
+  val BtbSize = 256
+  // val BtbWays = 4
+  val BtbBanks = PredictWidth
+  // val BtbSets = BtbSize / BtbWays
+  val JbtacSize = 1024
+  val JbtacBanks = 8
+  val RasSize = 16
   val IBufSize = 64
   val DecodeWidth = 6
   val RenameWidth = 6
@@ -81,6 +92,7 @@ trait NeedImpl { this: Module =>
 
 abstract class XSBundle extends Bundle
   with HasXSParameter
+  with HasTageParameter
 
 case class XSConfig
 (
@@ -88,7 +100,23 @@ case class XSConfig
   EnableDebug: Boolean = true
 )
 
-class XSCore(implicit val p: XSConfig) extends XSModule {
+object AddressSpace extends HasXSParameter {
+  // (start, size)
+  // address out of MMIO will be considered as DRAM
+  def mmio = List(
+    (0x30000000L, 0x10000000L),  // internal devices, such as CLINT and PLIC
+    (0x40000000L, 0x40000000L) // external devices
+  )
+
+  def isMMIO(addr: UInt): Bool = mmio.map(range => {
+    require(isPow2(range._2))
+    val bits = log2Up(range._2)
+    (addr ^ range._1.U)(PAddrBits-1, bits) === 0.U
+  }).reduce(_ || _)
+}
+
+
+class XSCore(implicit p: XSConfig) extends XSModule {
   val io = IO(new Bundle {
     val imem = new SimpleBusC
     val dmem = new SimpleBusC

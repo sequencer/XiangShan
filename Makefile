@@ -11,7 +11,8 @@ IMAGE ?= temp
 
 # remote machine with high frequency to speedup verilog generation
 REMOTE ?= localhost
-REMOTE_PREFIX ?= /nfs/24/$(abspath .)/
+REMOTE_PREFIX ?= /nfs/24
+REMOTE_PRJ_HOME = $(REMOTE_PREFIX)/$(abspath .)/
 
 .DEFAULT_GOAL = verilog
 
@@ -43,12 +44,13 @@ verilog: $(TOP_V)
 
 SIM_TOP = XSSimTop
 SIM_TOP_V = $(BUILD_DIR)/$(SIM_TOP).v
+SIM_ARGS =
 $(SIM_TOP_V): $(SCALA_FILE) $(TEST_FILE)
 	mkdir -p $(@D)
 ifeq ($(REMOTE),localhost)
-	mill chiselModule.test.runMain $(SIMTOP) -X verilog -td $(@D) --output-file $(@F)
+	mill chiselModule.test.runMain $(SIMTOP) -X verilog -td $(@D) --output-file $(@F) $(SIM_ARGS)
 else
-	ssh $(REMOTE) "cd $(REMOTE_PREFIX) && mill chiselModule.test.runMain $(SIMTOP) -X verilog -td $(@D) --output-file $(@F)"
+	ssh $(REMOTE) "cd $(REMOTE_PRJ_HOME) && mill chiselModule.test.runMain $(SIMTOP) -X verilog -td $(@D) --output-file $(@F) $(SIM_ARGS)"
 endif
 
 
@@ -96,20 +98,19 @@ $(REF_SO):
 $(EMU): $(EMU_MK) $(EMU_DEPS) $(EMU_HEADERS) $(REF_SO)
 	CPPFLAGS=-DREF_SO=\\\"$(REF_SO)\\\" $(MAKE) VM_PARALLEL_BUILDS=1 -C $(dir $(EMU_MK)) -f $(abspath $(EMU_MK))
 
-SEED = -s $(shell seq 1 10000 | shuf | head -n 1)
+SEED = -s $(shell shuf -i 1-10000 -n 1)
 
 
 # log will only be printed when (B<=GTimer<=E) && (L < loglevel)
 # use 'emu -h' to see more details
 B ?= 0
 E ?= -1
-V ?= ALL
 
 emu: $(EMU)
 ifeq ($(REMOTE),localhost)
-	@$(EMU) -i $(IMAGE) $(SEED) -b $(B) -e $(E) -v $(V)
+	@$(EMU) -i $(IMAGE) $(SEED) -b $(B) -e $(E)
 else
-	ssh $(REMOTE) "cd $(REMOTE_PREFIX) && $(EMU) -i $(IMAGE) $(SEED) -b $(B) -e $(E) -v $(V)"
+	ssh $(REMOTE) "cd $(REMOTE_PRJ_HOME) && $(EMU) -i $(REMOTE_PREFIX)/$(realpath $(IMAGE)) $(SEED) -b $(B) -e $(E)"
 endif
 
 cache:

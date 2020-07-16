@@ -8,6 +8,7 @@ import bus.axi4._
 import chisel3.stage.ChiselGeneratorAnnotation
 import device.AXI4RAM
 import xiangshan._
+import utils._
 
 class DiffTestIO extends XSBundle {
   val r = Output(Vec(64, UInt(XLEN.W)))
@@ -81,19 +82,21 @@ class XSSimTop extends Module {
   BoringUtils.addSink(difftest.scause, "difftestScause")
   io.difftest := difftest
 
-  val log_begin, log_end, log_level = Wire(UInt(64.W))
-  log_begin := io.logCtrl.log_begin
-  log_end := io.logCtrl.log_end
-  log_level := io.logCtrl.log_level
+  val logEnable = (GTimer() >= io.logCtrl.log_begin) && (GTimer() < io.logCtrl.log_end)
+  ExcitingUtils.addSource(logEnable, "DISPLAY_LOG_ENABLE")
 
-  BoringUtils.addSource(log_begin, "DISPLAY_LOG_START")
-  BoringUtils.addSource(log_end, "DISPLAY_LOG_END")
-  BoringUtils.addSource(log_level, "DISPLAY_LOG_LEVEL")
+  // Check and dispaly all source and sink connections
+  ExcitingUtils.checkAndDisplay()
 }
 
 object TestMain extends App {
+  if (args.contains("--disable-log"))
+    XSLog.generateLog = false
+  else
+    XSLog.generateLog = true
+
   (new chisel3.stage.ChiselStage).execute(
-    args,
+    args.filterNot(_ == "--disable-log"),
     Seq(ChiselGeneratorAnnotation(() => new XSSimTop))
   )
 }

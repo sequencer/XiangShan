@@ -1,9 +1,9 @@
-package xiangshan.utils
+package utils
 
 import chisel3._
 import chisel3.util.experimental.BoringUtils
 import xiangshan.HasXSParameter
-import xiangshan.utils.XSLogLevel.XSLogLevel
+import utils.XSLogLevel.XSLogLevel
 
 object XSLogLevel extends Enumeration {
   type XSLogLevel = Value
@@ -17,28 +17,18 @@ object XSLogLevel extends Enumeration {
 }
 
 object XSLog {
-
-  def displayLog: Bool = {
-    val disp_begin, disp_end = WireInit(0.U(64.W))
-    BoringUtils.addSink(disp_begin, "DISPLAY_LOG_START")
-    BoringUtils.addSink(disp_end, "DISPLAY_LOG_END")
-    assert(disp_begin <= disp_end)
-    (GTimer() >= disp_begin) && (GTimer() <= disp_end)
-  }
-
-  def xsLogLevel: UInt = {
-    val log_level = WireInit(0.U(64.W))
-    BoringUtils.addSink(log_level, "DISPLAY_LOG_LEVEL")
-    assert(log_level < XSLogLevel.maxId.U)
-    log_level
-  }
-
+  var generateLog: Boolean = false
   def apply(debugLevel: XSLogLevel)
            (prefix: Boolean, cond: Bool, pable: Printable)
-           (implicit name: String): Any = {
+           (implicit name: String): Any =
+  {
     val commonInfo = p"[$debugLevel][time=${GTimer()}] $name: "
-    when (debugLevel.id.U >= xsLogLevel && cond && displayLog) {
-      printf((if (prefix) commonInfo else p"") + pable)
+    val logEnable = WireInit(false.B)
+    ExcitingUtils.addSink(logEnable, "DISPLAY_LOG_ENABLE")
+    if(generateLog){
+      when (cond && logEnable) {
+        printf((if (prefix) commonInfo else p"") + pable)
+      }
     }
   }
 }

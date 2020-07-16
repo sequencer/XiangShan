@@ -4,16 +4,11 @@ import chisel3._
 import chisel3.util._
 import chisel3.util.experimental.BoringUtils
 import xiangshan._
-import xiangshan.FuType._
-import xiangshan.utils._
-import xiangshan.backend.regfile.RfWritePort
 import utils._
 import bus.simplebus._
-import noop.AddressSpace
+import xiangshan.AddressSpace
 import xiangshan.backend._
 import xiangshan.backend.brq.BrqPtr
-import xiangshan.backend.fu.FunctionUnit._
-
 
 
 class StoreQueueEntry extends XSBundle{
@@ -187,8 +182,8 @@ class LsExeUnit extends Exu(Exu.lsuExeUnitCfg){
   val expRedirect = io.redirect.valid && io.redirect.bits.isException
   val brRedirect = io.redirect.valid && !io.redirect.bits.isException
   for(i <- 0 until 8){
-    when(expRedirect || brRedirect && stqData(i).brTag.needBrFlush(io.redirect.bits.brTag) && stqValid(i)){
-      stqValid(i) := false.B
+    when((i.U >= stqCommited) && (expRedirect || brRedirect && stqData(stqPtr(i)).brTag.needBrFlush(io.redirect.bits.brTag) && stqValid(stqPtr(i)))){
+      stqValid(stqPtr(i)) := false.B
     }
     XSDebug("sptrtable: id %d ptr %d valid  %d\n", i.U, stqPtr(i), stqValid(stqPtr(i)))
   }

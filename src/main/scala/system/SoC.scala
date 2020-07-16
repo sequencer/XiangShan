@@ -10,9 +10,9 @@ import chisel3.util.experimental.BoringUtils
 import xiangshan.{XSConfig, XSCore}
 
 trait HasSoCParameter {
-  val EnableILA = true
-  val HasL2cache = true
-  val HasPrefetch = true
+  val EnableILA = false
+  val HasL2cache = false
+  val HasPrefetch = false
 }
 
 class ILABundle extends Bundle {}
@@ -64,7 +64,7 @@ class XSSoc(implicit val p: XSConfig) extends Module with HasSoCParameter {
 
   val addrSpace = List(
     (0x40000000L, 0x08000000L), // external devices
-    (0x48000000L, 0x00010000L)  // CLINT
+    (0x38000000L, 0x00010000L)  // CLINT
   )
   val mmioXbar = Module(new SimpleBusCrossbar1toN(addrSpace))
   mmioXbar.io.in <> xsCore.io.mmio
