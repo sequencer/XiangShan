@@ -11,12 +11,14 @@ trait HasIFUConst { this: XSModule =>
   val groupAlign = log2Up(FetchWidth * 4)
   def groupPC(pc: UInt): UInt = Cat(pc(VAddrBits-1, groupAlign), 0.U(groupAlign.W))
   def snpc(pc: UInt): UInt = pc + (1 << groupAlign).U
-  
+
 }
 
 class IFUIO extends XSBundle
 {
     val fetchPacket = DecoupledIO(new FetchPacket)
+    val btbTaken = Output(Bool())
+    val loopPC = Input(ValidIO(UInt(VAddrBits.W)))
     val redirectInfo = Input(new RedirectInfo)
     val icacheReq = DecoupledIO(new FakeIcacheReq)
     val icacheResp = Flipped(DecoupledIO(new FakeIcacheResp))
@@ -50,7 +52,7 @@ class IFU extends XSModule with HasIFUConst
     //-------------------------
     //local
     val if1_npc = WireInit(0.U(VAddrBits.W))
-    val if1_valid = !reset.asBool 
+    val if1_valid = !reset.asBool
     val if1_pc = RegInit(resetVector.U(VAddrBits.W))
     //next
     val if2_ready = WireInit(false.B)
@@ -58,7 +60,7 @@ class IFU extends XSModule with HasIFUConst
     val needflush = WireInit(false.B)
 
     //pipe fire
-    val if1_fire = if1_valid && if2_ready 
+    val if1_fire = if1_valid && if2_ready
     val if1_pcUpdate = if1_fire || needflush
 
     when(RegNext(reset.asBool) && !reset.asBool){
@@ -70,12 +72,12 @@ class IFU extends XSModule with HasIFUConst
     }
 
     when(if1_pcUpdate)
-    { 
+    {
       if1_pc := if1_npc
     }
 
     bpu.io.in.pc.valid := if1_fire
-    bpu.io.in.pc.bits := if1_npc
+    bpu.io.in.pc.bits := Mux(io.loopPC.valid, io.loopPC.bits, if1_npc)
     bpu.io.redirectInfo := io.redirectInfo
 
     XSDebug("[IF1]if1_valid:%d  ||  if1_npc:0x%x  || if1_pcUpdate:%d if1_pc:0x%x  || if2_ready:%d",if1_valid,if1_npc,if1_pcUpdate,if1_pc,if2_ready)
@@ -83,7 +85,7 @@ class IFU extends XSModule with HasIFUConst
     XSDebug(false,true.B,"\n")
 
     //-------------------------
-    //      IF2  btb response 
+    //      IF2  btb response
     //           icache visit
     //-------------------------
     //local
@@ -107,6 +109,8 @@ class IFU extends XSModule with HasIFUConst
     {
       if1_npc := if2_btb_target
     }
+
+    io.btbTaken := if2_btb_taken
 
     XSDebug("[IF2]if2_valid:%d  ||  if2_pc:0x%x   || if3_ready:%d                                        ",if2_valid,if2_pc,if3_ready)
     XSDebug(false,if2_fire,"------IF2->fire!!!")
@@ -137,7 +141,7 @@ class IFU extends XSModule with HasIFUConst
     XSDebug(false,true.B,"\n")
 
     //-------------------------
-    //      IF4  icache response   
+    //      IF4  icache response
     //           RAS result
     //           taget generate
     //-------------------------
@@ -174,8 +178,8 @@ class IFU extends XSModule with HasIFUConst
       if1_npc := io.redirectInfo.redirect.target
     }
     XSDebug(io.redirectInfo.flush(),"[IFU-REDIRECT] target:0x%x  \n",io.redirectInfo.redirect.target.asUInt)
-    
-  
+
+
     //flush pipline
     if(EnableBPD){needflush := (if4_valid && if4_btb_missPre) || io.redirectInfo.flush() }
     else {needflush := io.redirectInfo.flush()}
@@ -199,7 +203,7 @@ class IFU extends XSModule with HasIFUConst
     }
     else{
       io.fetchPacket.bits.mask := Fill(FetchWidth*2, 1.U(1.W)) //TODO : consider cross cacheline fetch
-    }    
+    }
     io.fetchPacket.bits.pc := if4_pc
 
     XSDebug(io.fetchPacket.fire,"[IFU-Out-FetchPacket] starPC:0x%x   GroupPC:0x%xn\n",if4_pc.asUInt,groupPC(if4_pc).asUInt)
@@ -215,7 +219,7 @@ class IFU extends XSModule with HasIFUConst
         io.fetchPacket.bits.pnpc(i) := if4_pc + ((i + 1).U << 2.U) //use fetch PC
       }
       XSDebug(io.fetchPacket.fire,"[IFU-Out-FetchPacket] instruction %x    pnpc:0x%x\n",io.fetchPacket.bits.instrs(i).asUInt,io.fetchPacket.bits.pnpc(i).asUInt)
-    }    
+    }
     io.fetchPacket.bits.hist := bpu.io.tageOut.bits.hist
     // io.fetchPacket.bits.btbVictimWay := bpu.io.tageOut.bits.btbVictimWay
     io.fetchPacket.bits.predCtr := bpu.io.tageOut.bits.predCtr

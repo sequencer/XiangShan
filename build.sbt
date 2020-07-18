@@ -56,3 +56,4 @@ javacOptions ++= javacOptionsVersion(scalaVersion.value)
 
 libraryDependencies += "edu.berkeley.cs" %% "chiseltest" % "0.2.1"
 
+libraryDependencies += "edu.berkeley.cs" %% "chiseltest" % "0.2.1"
