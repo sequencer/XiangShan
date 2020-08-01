@@ -5,14 +5,16 @@ import chisel3.util._
 import utils._
 import xiangshan._
 
-class LoopBuffer extends XSModule {
-  val io = IO(new Bundle() {
-    val flush = Input(Bool())
-    val in = Flipped(DecoupledIO(new FetchPacket))
-    val out = Vec(DecodeWidth, DecoupledIO(new CtrlFlow))
-  })
+class LoopBufferIO extends XSBundle {
+  val flush = Input(Bool())
+  val in = Flipped(DecoupledIO(new FetchPacket))
+  val out = Vec(DecodeWidth, DecoupledIO(new CtrlFlow))
+}
 
-  class LBufEntry extends XSBundle {
+class LoopBuffer extends XSModule {
+  val io = IO(new LoopBufferIO)
+
+  class IBufEntry extends XSBundle {
     val inst = UInt(32.W)
     val pc = UInt(VAddrBits.W)
     val fetchOffset = UInt((log2Up(FetchWidth * 4)).W)
@@ -31,6 +33,11 @@ class LoopBuffer extends XSModule {
 
     // val valid = Bool()
     val isTaken = Bool()
+    val isLoop = Bool()
+  }
+
+  class LBufEntry extends XSBundle {
+    val inst = UInt(32.W)
   }
 
   // ignore
@@ -69,7 +76,9 @@ class LoopBuffer extends XSModule {
   def isOverflow(ptr: UInt): Bool = lbuf_valid(ptr)
 
   // Loop Buffer define
+  val ibuf = Reg(Vec(IBufSize, new IBufEntry))
   val lbuf = Reg(Vec(IBufSize, new LBufEntry))
+  val ibuf_valid = RegInit(VecInit(Seq.fill(IBufSize)(false.B)))
   val lbuf_valid = RegInit(VecInit(Seq.fill(IBufSize)(false.B)))
   val out_isTaken = WireInit(VecInit(Seq.fill(DecodeWidth)(false.B)))
   val head_ptr = RegInit(0.U(log2Up(IBufSize).W))
@@ -103,6 +112,7 @@ class LoopBuffer extends XSModule {
     for(i <- 0 until IBufSize) {
       lbuf(i).inst := 0.U // Delete can improve performance?
       lbuf(i).pc := 0.U // Delete can improve performance?
+      ibuf_valid(i) := false.B
       lbuf_valid(i) := false.B
     }
     head_ptr := 0.U
@@ -132,71 +142,34 @@ class LoopBuffer extends XSModule {
   /*---------------*/
   /*    Dequeue    */
   /*---------------*/
-  var deq_idx = WireInit(0.U(log2Up(DecodeWidth+2).W))
+  var deq_idx = WireInit(head_ptr)
 
-  when(LBstate =/= s_active) {
-    for(i <- 0 until DecodeWidth) {
-    //   io.out(i).valid := !isEmpty(head_ptr + deq_idx, tail_ptr) && lbuf_valid(head_ptr + deq_idx)
-      io.out(i).valid := lbuf_valid(head_ptr + deq_idx)
+  for(i <- 0 until DecodeWidth) {
+    io.out(i).valid := ibuf_valid(deq_idx)
 
-      when(io.out(i).fire){
-        io.out(i).bits.instr := lbuf(head_ptr + deq_idx).inst
-        io.out(i).bits.pc := lbuf(head_ptr + deq_idx).pc
-        io.out(i).bits.fetchOffset := lbuf(head_ptr + deq_idx).fetchOffset
-        io.out(i).bits.pnpc := lbuf(head_ptr + deq_idx).pnpc
-        io.out(i).bits.hist := lbuf(head_ptr + deq_idx).hist
-        io.out(i).bits.btbPredCtr := lbuf(head_ptr + deq_idx).btbPredCtr
-        io.out(i).bits.btbHit := lbuf(head_ptr + deq_idx).btbHit
-        io.out(i).bits.tageMeta := lbuf(head_ptr + deq_idx).tageMeta
-        io.out(i).bits.rasSp := lbuf(head_ptr + deq_idx).rasSp
-        io.out(i).bits.rasTopCtr := lbuf(head_ptr + deq_idx).rasTopCtr
-        io.out(i).bits.isRVC := false.B
-        lbuf_valid(head_ptr + deq_idx) := (lbuf_valid(head_ptr + deq_idx) && LBstate === s_fill) || (has_sbb && sbbTaken && !has_branch && i.U > sbbIdx)
-        out_isTaken(i) := lbuf(head_ptr + deq_idx).isTaken
-      }.otherwise {
-        io.out(i).bits <> DontCare
-      }
-
-      // XSDebug("deq_idx=%d\n", deq_idx)
-      deq_idx = deq_idx + (lbuf_valid(head_ptr + deq_idx) && io.out(i).fire)
+    when(io.out(i).fire){
+      io.out(i).bits.instr := Mux(LBstate === s_active, lbuf(ibuf(deq_idx).pc(7,1)), ibuf(deq_idx).inst)
+      io.out(i).bits.pc := ibuf(deq_idx).pc
+      io.out(i).bits.fetchOffset := ibuf(deq_idx).fetchOffset
+      io.out(i).bits.pnpc := ibuf(deq_idx).pnpc
+      io.out(i).bits.hist := ibuf(deq_idx).hist
+      io.out(i).bits.btbPredCtr := ibuf(deq_idx).btbPredCtr
+      io.out(i).bits.btbHit := ibuf(deq_idx).btbHit
+      io.out(i).bits.tageMeta := ibuf(deq_idx).tageMeta
+      io.out(i).bits.rasSp := ibuf(deq_idx).rasSp
+      io.out(i).bits.rasTopCtr := ibuf(deq_idx).rasTopCtr
+      io.out(i).bits.isRVC := false.B
+      ibuf_valid(deq_idx) := false.B
+      out_isTaken(i) := ibuf(deq_idx).isTaken
+    }.otherwise {
+      io.out(i).bits <> DontCare
     }
 
-    head_ptr := head_ptr + deq_idx
-  }.otherwise {
-    deq_idx = 0.U
-    for(i <- 0 until DecodeWidth) {
-      io.out(i).valid := deq_idx =/= DecodeWidth.U + 1.U && lbuf(loop_ptr + deq_idx).pc <= tsbbPC
-
-      when(io.out(i).fire) {
-        io.out(i).bits.instr := lbuf(loop_ptr + deq_idx).inst
-        io.out(i).bits.pc := lbuf(loop_ptr + deq_idx).pc
-        io.out(i).bits.fetchOffset := lbuf(loop_ptr + deq_idx).fetchOffset
-        io.out(i).bits.pnpc := lbuf(loop_ptr + deq_idx).pnpc
-        io.out(i).bits.hist := lbuf(loop_ptr + deq_idx).hist
-        io.out(i).bits.btbPredCtr := lbuf(loop_ptr + deq_idx).btbPredCtr
-        io.out(i).bits.btbHit := lbuf(loop_ptr + deq_idx).btbHit
-        io.out(i).bits.tageMeta := lbuf(loop_ptr + deq_idx).tageMeta
-        io.out(i).bits.rasSp := lbuf(loop_ptr + deq_idx).rasSp
-        io.out(i).bits.rasTopCtr := lbuf(loop_ptr + deq_idx).rasTopCtr
-        io.out(i).bits.isRVC := false.B
-        // out_isTaken(i) := lbuf(loop_ptr + deq_idx).isTaken
-      }.otherwise {
-        io.out(i).bits <> DontCare
-      }
-
-      // deq_idx = Mux(deq_idx === DecodeWidth.U + 1.U || loop_ptr + deq_idx === loop_end, DecodeWidth.U + 1.U, deq_idx + io.out(i).fire)
-      deq_idx = PriorityMux(Seq(
-        (!io.out(i).fire || deq_idx === DecodeWidth.U + 1.U) -> deq_idx,
-        (loop_ptr + deq_idx === loop_end) -> (DecodeWidth.U + 1.U),
-        (loop_ptr + deq_idx =/= loop_end) -> (deq_idx + 1.U)
-      ))
-    }
-
-    val next_loop_ptr = Mux(deq_idx === DecodeWidth.U + 1.U, loop_str, loop_ptr + deq_idx)
-    loop_ptr := next_loop_ptr
-    //    XSDebug("deq_idx = %d\n", deq_idx)
-    //    XSDebug("loop_ptr = %d\n", Mux(deq_idx === DecodeWidth.U, loop_str, loop_ptr + deq_idx))
+    // XSDebug("deq_idx=%d\n", deq_idx)
+    deq_idx = deq_idx + io.out(i).fire
   }
+
+  head_ptr := deq_idx
 
   val offsetCounterWire = WireInit(offsetCounter + (PopCount((0 until DecodeWidth).map(io.out(_).fire())) << 1).asUInt)
   offsetCounter := offsetCounterWire
@@ -205,26 +178,28 @@ class LoopBuffer extends XSModule {
   /*---------------*/
   /*    Enqueue    */
   /*---------------*/
-  var enq_idx = 0.U(log2Up(FetchWidth+1).W)
+  var enq_idx = WireInit(tail_ptr)
 
-  io.in.ready := LBstate =/= s_active && !isOverflow(tail_ptr + FetchWidth.U - 1.U)
+  io.in.ready := enqValid
 
-  when(io.in.fire()){
+  when(io.in.fire){
     for(i <- 0 until FetchWidth) {
-      lbuf(tail_ptr + enq_idx).inst := io.in.bits.instrs(i)
-      lbuf(tail_ptr + enq_idx).pc := io.in.bits.pc + (enq_idx << 2).asUInt
-      lbuf(tail_ptr + enq_idx).pnpc := io.in.bits.pnpc(i<<1)
-      lbuf(tail_ptr + enq_idx).fetchOffset := (enq_idx<<2).asUInt
-      lbuf(tail_ptr + enq_idx).hist := io.in.bits.hist(i<<1)
-      lbuf(tail_ptr + enq_idx).btbPredCtr := io.in.bits.predCtr(i<<1)
-      lbuf(tail_ptr + enq_idx).btbHit := io.in.bits.btbHit(i<<1)
-      lbuf(tail_ptr + enq_idx).tageMeta := io.in.bits.tageMeta(i<<1)
-      lbuf(tail_ptr + enq_idx).rasSp := io.in.bits.rasSp
-      lbuf(tail_ptr + enq_idx).rasTopCtr := io.in.bits.rasTopCtr
+      ibuf(tail_ptr + enq_idx).inst := io.in.bits.instrs(i)
+      lbuf(io.in.bits.pc(7,0)) := io.in.bits.instrs(i)
+      lbuf_valid(io.in.bits.pc(7,0)) := lbuf_valid(io.in.bits.pc(7,0)) && LBstate === s_fill
+      ibuf(tail_ptr + enq_idx).pc := io.in.bits.pc + (enq_idx << 2).asUInt
+      ibuf(tail_ptr + enq_idx).pnpc := io.in.bits.pnpc(i<<1)
+      ibuf(tail_ptr + enq_idx).fetchOffset := (enq_idx<<2).asUInt
+      ibuf(tail_ptr + enq_idx).hist := io.in.bits.hist(i<<1)
+      ibuf(tail_ptr + enq_idx).btbPredCtr := io.in.bits.predCtr(i<<1)
+      ibuf(tail_ptr + enq_idx).btbHit := io.in.bits.btbHit(i<<1)
+      ibuf(tail_ptr + enq_idx).tageMeta := io.in.bits.tageMeta(i<<1)
+      ibuf(tail_ptr + enq_idx).rasSp := io.in.bits.rasSp
+      ibuf(tail_ptr + enq_idx).rasTopCtr := io.in.bits.rasTopCtr
 
-      lbuf_valid(tail_ptr + enq_idx) := io.in.bits.mask(i<<1) // FIXME: need fix me when support RVC
-      lbuf(tail_ptr + enq_idx).isTaken := io.in.bits.branchInfo(i) // isTaken can reduce to LBufSize/FetchWidth
-      // lbuf(tail_ptr + enq_idx).isTaken := false.B // isTaken can reduce to LBufSize/FetchWidth
+      ibuf_valid(tail_ptr + enq_idx) := io.in.bits.mask(i<<1) // FIXME: need fix me when support RVC
+      ibuf(tail_ptr + enq_idx).isTaken := io.in.bits.branchInfo(i) // isTaken can reduce to ibufSize/FetchWidth
+      // ibuf(tail_ptr + enq_idx).isTaken := false.B // isTaken can reduce to ibufSize/FetchWidth
 
       enq_idx = enq_idx + io.in.bits.mask(i<<1)
     }
