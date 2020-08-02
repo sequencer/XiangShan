@@ -160,9 +160,10 @@ class LoopBuffer extends XSModule {
   var enq_idx = WireInit(tail_ptr)
   when(io.in.fire) {
     for(i <- 0 until PredictWidth) {
+      val enqLB = LBstate === s_fill || (sbbTaken && i.U > brIdx)
       ibuf(enq_idx).inst := io.in.bits.instrs(i)
-      ibuf(i).isLoop := LBstate === s_fill || (sbbTaken && i.U > brIdx)
-      when(LBstate === s_fill || (sbbTaken && i.U > brIdx)) {
+      ibuf(i).isLoop := enqLB
+      when(enqLB) {
         lbuf(io.in.bits.pc(7,0)).inst := io.in.bits.instrs(i)(15, 0)
         lbuf_valid(io.in.bits.pc(7,0)) := true.B
         when(!io.in.bits.isRVC) {
@@ -188,7 +189,12 @@ class LoopBuffer extends XSModule {
     tail_ptr := enq_idx
   }
 
-  val offsetCounterWire = WireInit(offsetCounter + (PopCount((0 until PredictWidth).map(io.in.bits.mask(i))) << 1).asUInt)
+  // val offsetCounterWire = WireInit(offsetCounter + (PopCount((0 until PredictWidth).map(io.in.bits.mask(i))) << 1).asUInt)
+  val offsetCounterWire = WireInit(offsetCounter + ((0 until PredictWidth).map(i => PriorityMux(Seq(
+    !(io.in.fire && io.in.bits.mask(i)) -> 0.U,
+    io.in.bits.isRVC(i) -> 1.U,
+    !io.in.bits.isRVC(i) -> 2.U,
+  ))).reduce(_+&_)).asUInt)
   offsetCounter := offsetCounterWire
 
   /*-----------------------*/
@@ -248,4 +254,34 @@ class LoopBuffer extends XSModule {
   }
 
   // Debug Info
+  XSDebug(io.flush, "LoopBuffer Flushed\n")
+
+  when(io.in.fire) {
+    XSDebug("Enque:\n")
+    XSDebug(p"PC=${Hexadecimal(io.in.bits.pc)} MASK=${Binary(io.in.bits.mask)}\n")
+    for(i <- 0 until FetchWidth){
+        XSDebug(p"${Hexadecimal(io.in.bits.instrs(i))}  v=${io.in.valid}  r=${io.in.ready}\n")
+    }
+  }
+
+  when(deqValid) {
+    XSDebug("Deque:\n")
+    for(i <- 0 until DecodeWidth){
+        XSDebug(p"${Hexadecimal(io.out(i).bits.instr)}  PC=${Hexadecimal(io.out(i).bits.pc)}  v=${io.out(i).valid}  r=${io.out(i).ready}\n")
+    }
+  }
+
+  XSDebug(p"last_head_ptr=$head_ptr  last_tail_ptr=$tail_ptr\n")
+  for(i <- 0 until IBufSize/8) {
+    XSDebug("%x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b\n",
+      ibuf(i*8+0).inst, ibuf_valid(i*8+0),
+        ibuf(i*8+1).inst, ibuf_valid(i*8+1),
+        ibuf(i*8+2).inst, ibuf_valid(i*8+2),
+        ibuf(i*8+3).inst, ibuf_valid(i*8+3),
+        ibuf(i*8+4).inst, ibuf_valid(i*8+4),
+        ibuf(i*8+5).inst, ibuf_valid(i*8+5),
+        ibuf(i*8+6).inst, ibuf_valid(i*8+6),
+        ibuf(i*8+7).inst, ibuf_valid(i*8+7)
+    )
+  }
 }
