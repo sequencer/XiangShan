@@ -9,8 +9,8 @@ class LoopBufferIO extends XSBundle {
   val flush = Input(Bool())
   val in = Flipped(DecoupledIO(new FetchPacket))
   val out = Vec(DecodeWidth, DecoupledIO(new CtrlFlow))
-  val isLoop = Output(Bool())
   val LBredirect = ValidIO(UInt(VAddrBits.W))
+  val inLoop = Output(Bool())
 }
 
 class LoopBuffer extends XSModule {
@@ -55,14 +55,21 @@ class LoopBuffer extends XSModule {
     inst === BitPat("b???????_?????_?????_???_?????_1100011")
   }
 
-  val brTaken = ParallelOR((0 until PredictWidth).map(i => io.in.fire && io.in.bits.mask(i) && io.in.bits.branchInfo(i))).asBool()
-  val brIdx = OHToUInt(io.in.bits.branchInfo.asUInt)
-  val sbbTaken = brTaken && isSBB(io.in.bits.instr(brIdx))
+  // predTaken to OH
+  val predTakenVec = Mux(io.in.bits.predTaken, Reverse(PriorityEncoderOH(Reverse(io.in.bits.mask))), 0.U(PredictWidth.W))
+
+  // Loop detect register
+  val offsetCounter = Reg(UInt((log2Up(IBufSize)+2).W))
+  val tsbbPC = RegInit(0.U(VAddrBits.W))
+
+  val brTaken = ParallelOR((0 until PredictWidth).map(i => io.in.fire && io.in.bits.mask(i) && predTakenVec(i))).asBool()
+  val brIdx = OHToUInt(predTakenVec.asUInt)
+  val sbbTaken = brTaken && isSBB(io.in.bits.instrs(brIdx))
 
   val tsbbVec = (0 until PredictWidth).map(i => io.in.fire && io.in.bits.mask(i) && io.in.bits.pc(i) === tsbbPC)
   val hasTsbb = ParallelOR(tsbbVec).asBool()
   val tsbbIdx = OHToUInt(VecInit(tsbbVec).asUInt)
-  val tsbbTaken = brTaken && brIdx === tsbbPC
+  val tsbbTaken = brTaken && io.in.bits.pc(brIdx) === tsbbPC
 
   // IBuffer define
   val ibuf = Reg(Vec(IBufSize, new IBufEntry))
@@ -77,13 +84,11 @@ class LoopBuffer extends XSModule {
   val lbuf = Reg(Vec(IBufSize*2, new LBufEntry))
   val lbuf_valid = RegInit(VecInit(Seq.fill(IBufSize*2)(false.B)))
 
-  // Loop detect register
-  val offsetCounter = Reg(UInt((log2Up(IBufSize)+2).W))
-  val tsbbPC = Reg(UInt(VAddrBits.W))
-
   // FSM state define
   val s_idle :: s_fill :: s_active :: Nil = Enum(3)
   val LBstate = RegInit(s_idle)
+
+  io.inLoop := LBstate === s_active
 
   def flushLB() = {
     for(i <- 0 until IBufSize*2) {
@@ -132,6 +137,9 @@ class LoopBuffer extends XSModule {
       deq_idx = deq_idx + io.out(i).fire
     }
     head_ptr := deq_idx
+  }.otherwise {
+    io.out.foreach(_.valid := false.B)
+    io.out.foreach(_.bits <> DontCare)
   }
 
   /*---------------*/
@@ -142,84 +150,89 @@ class LoopBuffer extends XSModule {
   var enq_idx = WireInit(tail_ptr)
   when(io.in.fire) {
     for(i <- 0 until PredictWidth) {
-      ibuf(enq_idx).inst := io.in.bits.instrs(i)
-      ibuf(enq_idx).isLoop := LBstate === s_fill || (sbbTaken && i.U > brIdx)
-      when(LBstate === s_fill || (sbbTaken && i.U > brIdx)) {
-        lbuf(io.in.bits.pc(i)(7,0)).inst := io.in.bits.instrs(i)(15, 0)
-        lbuf_valid(io.in.bits.pc(i)(7,0)) := true.B
-        when(!io.in.bits.pd(i).isRVC) {
-          lbuf(io.in.bits.pc(i)(7,0) + 1.U).inst := io.in.bits.instrs(i)(31, 16)
-          lbuf_valid(io.in.bits.pc(i)(7,0) + 1.U) := true.B
+      when(io.in.bits.mask(i)) {
+        ibuf(enq_idx).inst := io.in.bits.instrs(i)
+        ibuf(enq_idx).isLoop := LBstate === s_fill// || (sbbTaken && i.U > brIdx)
+        when(LBstate === s_fill/* || (sbbTaken && i.U > brIdx)*/) {
+          lbuf(io.in.bits.pc(i)(7,1)).inst := io.in.bits.instrs(i)(15, 0)
+          lbuf_valid(io.in.bits.pc(i)(7,1)) := true.B
+          when(!io.in.bits.pd(i).isRVC) {
+            lbuf(io.in.bits.pc(i)(7,1) + 1.U).inst := io.in.bits.instrs(i)(31, 16)
+            lbuf_valid(io.in.bits.pc(i)(7,1) + 1.U) := true.B
+          }
         }
-      }
-      ibuf(enq_idx).pc := io.in.bits.pc(i)
-      ibuf(enq_idx).pnpc := io.in.bits.pnpc(i)
-      ibuf(enq_idx).brInfo := io.in.bits.brInfo(i)
-      ibuf(enq_idx).pd := io.in.bits.pd(i)
+        ibuf(enq_idx).pc := io.in.bits.pc(i)
+        ibuf(enq_idx).pnpc := io.in.bits.pnpc(i)
+        ibuf(enq_idx).brInfo := io.in.bits.brInfo(i)
+        ibuf(enq_idx).pd := io.in.bits.pd(i)
 
-      ibuf_valid(enq_idx) := io.in.bits.mask(i)
+        ibuf_valid(enq_idx) := true.B
+      }
 
       enq_idx = enq_idx + io.in.bits.mask(i)
     }
 
     tail_ptr := enq_idx
   }
+    // This is ugly
+    val pcStep = (0 until PredictWidth).map(i => Mux(!io.in.fire || !io.in.bits.mask(i), 0.U, Mux(io.in.bits.pd(i).isRVC, 1.U, 2.U))).fold(0.U(log2Up(16+1).W))(_+_)
+    val offsetCounterWire = WireInit(offsetCounter + pcStep)
+    offsetCounter := offsetCounterWire
 
-  // This is ugly
-  val pcStep = (0 until PredictWidth).map(i => Mux(!io.in.bits.mask(i), 0.U, Mux(io.in.bits.pd(i).isRVC, 1.U, 2.U))).fold(0.U(log2Up(16+1).W))(_+_)
-  val offsetCounterWire = WireInit(offsetCounter + pcStep)
-  offsetCounter := offsetCounterWire
 
   /*-----------------------*/
   /*    Loop Buffer FSM    */
   /*-----------------------*/
-  switch(LBstate) {
-    is(s_idle) {
-      // To FILL
-      // 检测到sbb且跳转，sbb成为triggering sbb
-      when(sbbTaken) {
-        LBstate := s_fill
-        XSDebug("State change: FILL\n")
-        // This is ugly
-        offsetCounter := Cat("b1".U, SBBOffset(io.in.bits.instrs(brIdx))) + 
-          (0 until PredictWidth).map(i => Mux(!io.in.bits.mask(i) || i < brIdx, 0.U, Mux(io.in.bits.pd(i).isRVC, 1.U, 2.U))).fold(0.U(log2Up(16+1).W))(_+_)
-        tsbbPC := io.in.bits.pc(brIdx)
+  when(io.in.fire) {
+    switch(LBstate) {
+      is(s_idle) {
+        // To FILL
+        // 检测到sbb且跳转，sbb成为triggering sbb
+        when(sbbTaken) {
+          LBstate := s_fill
+          XSDebug("State change: FILL\n")
+          // This is ugly
+          // offsetCounter := Cat("b1".U, SBBOffset(io.in.bits.instrs(brIdx))) + 
+          //   (0 until PredictWidth).map(i => Mux(!io.in.bits.mask(i) || i.U < brIdx, 0.U, Mux(io.in.bits.pd(i).isRVC, 1.U, 2.U))).fold(0.U(log2Up(16+1).W))(_+_)
+          offsetCounter := Cat("b1".U, SBBOffset(io.in.bits.instrs(brIdx)))
+          tsbbPC := io.in.bits.pc(brIdx)
+        }
       }
-    }
-    is(s_fill) {
-      // To AVTIVE
-      // triggering sbb 造成cof
-      when(offsetCounterWire((log2Up(IBufSize)+2)-1) === 0.U){
-        when(hasTsbb && tsbbTaken) {
-          LBstate := s_active
-          XSDebug("State change: ACTIVE\n")
-        }.otherwise {
+      is(s_fill) {
+        // To AVTIVE
+        // triggering sbb 造成cof
+        when(offsetCounterWire((log2Up(IBufSize)+2)-1) === 0.U){
+          when(hasTsbb && tsbbTaken) {
+            LBstate := s_active
+            XSDebug("State change: ACTIVE\n")
+          }.otherwise {
+            LBstate := s_idle
+            XSDebug("State change: IDLE\n")
+            flushLB
+          }
+        }
+
+        when(brTaken && !tsbbTaken) {
+          // To IDLE
           LBstate := s_idle
           XSDebug("State change: IDLE\n")
           flushLB
         }
       }
-
-      when(brTaken && !tsbbTaken) {
+      is(s_active) {
         // To IDLE
-        LBstate := s_idle
-        XSDebug("State change: IDLE\n")
-        flushLB
-      }
-    }
-    is(s_active) {
-      // To IDLE
-      // triggering sbb不跳转 退出循环
-      when(hasTsbb && !tsbbTaken) {
-        XSDebug("tsbb not taken, State change: IDLE\n")
-        flush()
-        io.LBredirect.valid := false.B
-        io.LBredirect.bits := tsbbPC
-      }
+        // triggering sbb不跳转 退出循环
+        when(hasTsbb && !tsbbTaken) {
+          XSDebug("tsbb not taken, State change: IDLE\n")
+          flush()
+          io.LBredirect.valid := false.B
+          io.LBredirect.bits := tsbbPC
+        }
 
-      when(brTaken && !tsbbTaken) {
-        XSDebug("cof by other inst, State change: IDLE\n")
-        flush()
+        when(brTaken && !tsbbTaken) {
+          XSDebug("cof by other inst, State change: IDLE\n")
+          flush()
+        }
       }
     }
   }
@@ -229,10 +242,17 @@ class LoopBuffer extends XSModule {
   }
 
   // Debug Info
-  XSDebug(io.flush, "IBuffer Flushed\n")
+  XSDebug(io.flush, "LoopBuffer Flushed\n")
 
+  XSDebug(LBstate === s_idle, "Current state: IDLE\n")
+  XSDebug(LBstate === s_fill, "Current state: FILL\n")
+  XSDebug(LBstate === s_active, "Current state: ACTIVE\n")
+
+  XSDebug(p"offsetCounter = ${Binary(offsetCounterWire)}\n")
   when(io.in.fire) {
     XSDebug("Enque:\n")
+    XSDebug(brTaken, p"Detected jump, idx=${brIdx}\n")
+    XSDebug(p"predTaken=${io.in.bits.predTaken}, predTakenVec=${Binary(predTakenVec)}\n")
     XSDebug(p"MASK=${Binary(io.in.bits.mask)}\n")
     for(i <- 0 until PredictWidth){
         XSDebug(p"PC=${Hexadecimal(io.in.bits.pc(i))} ${Hexadecimal(io.in.bits.instrs(i))}\n")
@@ -247,16 +267,31 @@ class LoopBuffer extends XSModule {
   }
 
   XSDebug(p"last_head_ptr=$head_ptr  last_tail_ptr=$tail_ptr\n")
+  XSDebug("IBuffer:\n")
   for(i <- 0 until IBufSize/8) {
+    XSDebug("%x v:%b l:%b | %x v:%b l:%b | %x v:%b l:%b | %x v:%b l:%b | %x v:%b l:%b | %x v:%b l:%b | %x v:%b l:%b | %x v:%b l:%b\n",
+      ibuf(i*8+0).inst, ibuf_valid(i*8+0), ibuf(i*8+0).isLoop,
+        ibuf(i*8+1).inst, ibuf_valid(i*8+1), ibuf(i*8+1).isLoop,
+        ibuf(i*8+2).inst, ibuf_valid(i*8+2), ibuf(i*8+2).isLoop,
+        ibuf(i*8+3).inst, ibuf_valid(i*8+3), ibuf(i*8+3).isLoop,
+        ibuf(i*8+4).inst, ibuf_valid(i*8+4), ibuf(i*8+4).isLoop,
+        ibuf(i*8+5).inst, ibuf_valid(i*8+5), ibuf(i*8+5).isLoop,
+        ibuf(i*8+6).inst, ibuf_valid(i*8+6), ibuf(i*8+6).isLoop,
+        ibuf(i*8+7).inst, ibuf_valid(i*8+7), ibuf(i*8+7).isLoop
+    )
+  }
+
+  XSDebug("LoopBuffer:\n")
+  for(i <- 0 until IBufSize*2/8) {
     XSDebug("%x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b\n",
-      ibuf(i*8+0).inst, ibuf_valid(i*8+0),
-        ibuf(i*8+1).inst, ibuf_valid(i*8+1),
-        ibuf(i*8+2).inst, ibuf_valid(i*8+2),
-        ibuf(i*8+3).inst, ibuf_valid(i*8+3),
-        ibuf(i*8+4).inst, ibuf_valid(i*8+4),
-        ibuf(i*8+5).inst, ibuf_valid(i*8+5),
-        ibuf(i*8+6).inst, ibuf_valid(i*8+6),
-        ibuf(i*8+7).inst, ibuf_valid(i*8+7)
+      lbuf(i*8+0).inst, lbuf_valid(i*8+0),
+        lbuf(i*8+1).inst, lbuf_valid(i*8+1),
+        lbuf(i*8+2).inst, lbuf_valid(i*8+2),
+        lbuf(i*8+3).inst, lbuf_valid(i*8+3),
+        lbuf(i*8+4).inst, lbuf_valid(i*8+4),
+        lbuf(i*8+5).inst, lbuf_valid(i*8+5),
+        lbuf(i*8+6).inst, lbuf_valid(i*8+6),
+        lbuf(i*8+7).inst, lbuf_valid(i*8+7)
     )
   }
 }

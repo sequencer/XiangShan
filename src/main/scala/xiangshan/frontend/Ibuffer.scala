@@ -11,6 +11,8 @@ class Ibuffer extends XSModule {
     val flush = Input(Bool())
     val in = Flipped(DecoupledIO(new FetchPacket))
     val out = Vec(DecodeWidth, DecoupledIO(new CtrlFlow))
+    val LBredirect = ValidIO(UInt(VAddrBits.W))
+    val inLoop = Output(Bool())
   })
 
   class IBufEntry extends XSBundle {
@@ -27,6 +29,10 @@ class Ibuffer extends XSModule {
     out.bits.intrVec := DontCare
     out.bits.crossPageIPFFix := DontCare
   }
+
+  io.LBredirect.valid := false.B
+  io.LBredirect.bits := DontCare
+  io.inLoop := false.B
 
   // Ibuffer define
   val ibuf = Mem(IBufSize, new IBufEntry)

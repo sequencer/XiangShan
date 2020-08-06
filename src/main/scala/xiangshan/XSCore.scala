@@ -28,7 +28,7 @@ case class XSCoreParameters
   EnableBPU: Boolean = true,
   EnableBPD: Boolean = false,
   EnableRAS: Boolean = false,
-  EnableLB: Boolean = false,
+  EnableLB: Boolean = true,
   HistoryLength: Int = 64,
   BtbSize: Int = 2048,
   JbtacSize: Int = 1024,
