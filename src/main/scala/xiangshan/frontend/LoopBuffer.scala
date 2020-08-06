@@ -9,7 +9,7 @@ class LoopBufferIO extends XSBundle {
   val flush = Input(Bool())
   val in = Flipped(DecoupledIO(new FetchPacket))
   val out = Vec(DecodeWidth, DecoupledIO(new CtrlFlow))
-  val LBredirect = ValidIO(UInt(VAddrBits.W))
+  // val LBredirect = ValidIO(UInt(VAddrBits.W))
   val inLoop = Output(Bool())
 }
 
@@ -116,8 +116,8 @@ class LoopBuffer extends XSModule {
     flushIB
   }
 
-  io.LBredirect.valid := false.B
-  io.LBredirect.bits := DontCare
+  // io.LBredirect.valid := false.B
+  // io.LBredirect.bits := DontCare
 
   /*---------------*/
   /*    Dequeue    */
@@ -239,13 +239,13 @@ class LoopBuffer extends XSModule {
           XSDebug("tsbb not taken, State change: IDLE\n")
           LBstate := s_idle
           flushLB()
-          io.LBredirect.valid := true.B
-          io.LBredirect.bits := tsbbPC
         }
 
         when(brTaken && !tsbbTaken) {
           XSDebug("cof by other inst, State change: IDLE\n")
           LBstate := s_idle
+          // io.LBredirect.valid := true.B
+          // io.LBredirect.bits := io.in.bits.pc(brIdx)
           flushLB()
         }
       }

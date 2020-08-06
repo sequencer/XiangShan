@@ -24,7 +24,7 @@ class IFUIO extends XSBundle
   val icacheReq = DecoupledIO(new FakeIcacheReq)
   val icacheResp = Flipped(DecoupledIO(new FakeIcacheResp))
   val icacheFlush = Output(UInt(2.W))
-  val LBredirect = Flipped(ValidIO(UInt(VAddrBits.W)))
+  // val LBredirect = Flipped(ValidIO(UInt(VAddrBits.W)))
   val inLoop = Input(Bool())
 }
 
@@ -38,7 +38,7 @@ class IFU extends XSModule with HasIFUConst
   val if2_redirect, if3_redirect, if4_redirect = WireInit(false.B)
   val if1_flush, if2_flush, if3_flush, if4_flush = WireInit(false.B)
 
-  if4_flush := io.redirect.valid || io.LBredirect.valid
+  if4_flush := io.redirect.valid// || io.LBredirect.valid
   if3_flush := if4_flush || if4_redirect
   if2_flush := if3_flush || if3_redirect
   if1_flush := if2_flush || if2_redirect
@@ -223,9 +223,9 @@ class IFU extends XSModule with HasIFUConst
     extHist(newPtr) := io.outOfOrderBrInfo.bits.taken
   }
 
-  when (io.LBredirect.valid) {
-    if1_npc := io.LBredirect.bits
-  }
+  // when (io.LBredirect.valid) {
+  //   if1_npc := io.LBredirect.bits
+  // }
 
   when (io.redirect.valid) {
     if1_npc := io.redirect.bits.target
