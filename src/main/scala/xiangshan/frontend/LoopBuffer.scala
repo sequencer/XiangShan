@@ -22,7 +22,6 @@ class LoopBuffer extends XSModule {
     val pnpc = UInt(VAddrBits.W)
     val brInfo = new BranchInfo
     val pd = new PreDecodeInfo
-    val isLoop = Bool()
   }
 
   class LBufEntry extends XSBundle {
@@ -72,8 +71,9 @@ class LoopBuffer extends XSModule {
   val tsbbTaken = brTaken && io.in.bits.pc(brIdx) === tsbbPC
 
   // IBuffer define
-  val ibuf = Reg(Vec(IBufSize, new IBufEntry))
+  val ibuf = Mem(IBufSize, new IBufEntry)
   val ibuf_valid = RegInit(VecInit(Seq.fill(IBufSize)(false.B)))
+  val ibuf_isLoop = RegInit(VecInit(Seq.fill(IBufSize)(false.B)))
   val head_ptr = RegInit(0.U(log2Up(IBufSize).W))
   val tail_ptr = RegInit(0.U(log2Up(IBufSize).W))
 
@@ -81,7 +81,7 @@ class LoopBuffer extends XSModule {
   val deqValid = !io.flush && ibuf_valid(head_ptr)
 
   // LoopBuffer define
-  val lbuf = Reg(Vec(IBufSize*2, new LBufEntry))
+  val lbuf = Mem(IBufSize*2, new LBufEntry)
   val lbuf_valid = RegInit(VecInit(Seq.fill(IBufSize*2)(false.B)))
 
   // FSM state define
@@ -92,22 +92,28 @@ class LoopBuffer extends XSModule {
 
   def flushLB() = {
     for(i <- 0 until IBufSize*2) {
+      lbuf(i).inst := 0.U // TODO: This is to make the debugging information clearer, this can be deleted
       lbuf_valid(i) := false.B
     }
+  }
+
+  def flushIB() = {
+    for(i <- 0 until IBufSize) {
+      ibuf(i).inst := 0.U // TODO: This is to make the debugging information clearer, this can be deleted
+      ibuf(i).pc := 0.U // TODO: This is to make the debugging information clearer, this can be deleted
+      lbuf(i).inst := 0.U // TODO: This is to make the debugging information clearer, this can be deleted
+      ibuf_valid(i) := false.B
+      ibuf_isLoop(i) := false.B
+    }
+    head_ptr := 0.U
+    tail_ptr := 0.U
   }
 
   def flush() = {
     XSDebug("Loop Buffer Flushed.\n")
     LBstate := s_idle
-    for(i <- 0 until IBufSize) {
-      ibuf(i).inst := 0.U // TODO: This is to make the debugging information clearer and can be deleted
-      ibuf(i).pc := 0.U // TODO: This is to make the debugging information clearer and can be deleted
-      lbuf(i).inst := 0.U // TODO: This is to make the debugging information clearer and can be deleted
-      ibuf_valid(i) := false.B
-      lbuf_valid(i) := false.B
-    }
-    head_ptr := 0.U
-    tail_ptr := 0.U
+    flushLB
+    flushIB
   }
 
   io.LBredirect.valid := false.B
@@ -121,8 +127,8 @@ class LoopBuffer extends XSModule {
   when(deqValid) {
     for(i <- 0 until DecodeWidth) {
       io.out(i).valid := ibuf_valid(deq_idx)
-      when (ibuf_valid(deq_idx)) { ibuf_valid(deq_idx) := !io.out(i).fire }
-      when(ibuf(deq_idx).isLoop && LBstate === s_active) {
+      when(ibuf_valid(deq_idx)) { ibuf_valid(deq_idx) := !io.out(i).fire }
+      when(ibuf_isLoop(deq_idx) && LBstate === s_active) {
         io.out(i).bits.instr := Cat(lbuf(ibuf(deq_idx).pc(7,1) + 1.U).inst, lbuf(ibuf(deq_idx).pc(7,1)).inst)
       }.otherwise {
         io.out(i).bits.instr := ibuf(deq_idx).inst
@@ -152,7 +158,7 @@ class LoopBuffer extends XSModule {
     for(i <- 0 until PredictWidth) {
       when(io.in.bits.mask(i)) {
         ibuf(enq_idx).inst := io.in.bits.instrs(i)
-        ibuf(enq_idx).isLoop := LBstate === s_fill// || (sbbTaken && i.U > brIdx)
+        ibuf_isLoop(enq_idx) := LBstate === s_fill// || (sbbTaken && i.U > brIdx)
         when(LBstate === s_fill/* || (sbbTaken && i.U > brIdx)*/) {
           lbuf(io.in.bits.pc(i)(7,1)).inst := io.in.bits.instrs(i)(15, 0)
           lbuf_valid(io.in.bits.pc(i)(7,1)) := true.B
@@ -174,11 +180,11 @@ class LoopBuffer extends XSModule {
 
     tail_ptr := enq_idx
   }
-    // This is ugly
-    val pcStep = (0 until PredictWidth).map(i => Mux(!io.in.fire || !io.in.bits.mask(i), 0.U, Mux(io.in.bits.pd(i).isRVC, 1.U, 2.U))).fold(0.U(log2Up(16+1).W))(_+_)
-    val offsetCounterWire = WireInit(offsetCounter + pcStep)
-    offsetCounter := offsetCounterWire
 
+  // This is ugly
+  val pcStep = (0 until PredictWidth).map(i => Mux(!io.in.fire || !io.in.bits.mask(i), 0.U, Mux(io.in.bits.pd(i).isRVC, 1.U, 2.U))).fold(0.U(log2Up(16+1).W))(_+_)
+  val offsetCounterWire = WireInit(offsetCounter + pcStep)
+  offsetCounter := offsetCounterWire
 
   /*-----------------------*/
   /*    Loop Buffer FSM    */
@@ -224,14 +230,16 @@ class LoopBuffer extends XSModule {
         // triggering sbb不跳转 退出循环
         when(hasTsbb && !tsbbTaken) {
           XSDebug("tsbb not taken, State change: IDLE\n")
-          flush()
-          io.LBredirect.valid := false.B
+          LBstate := s_idle
+          flushLB()
+          io.LBredirect.valid := true.B
           io.LBredirect.bits := tsbbPC
         }
 
         when(brTaken && !tsbbTaken) {
           XSDebug("cof by other inst, State change: IDLE\n")
-          flush()
+          LBstate := s_idle
+          flushLB()
         }
       }
     }
@@ -270,14 +278,14 @@ class LoopBuffer extends XSModule {
   XSDebug("IBuffer:\n")
   for(i <- 0 until IBufSize/8) {
     XSDebug("%x v:%b l:%b | %x v:%b l:%b | %x v:%b l:%b | %x v:%b l:%b | %x v:%b l:%b | %x v:%b l:%b | %x v:%b l:%b | %x v:%b l:%b\n",
-      ibuf(i*8+0).inst, ibuf_valid(i*8+0), ibuf(i*8+0).isLoop,
-        ibuf(i*8+1).inst, ibuf_valid(i*8+1), ibuf(i*8+1).isLoop,
-        ibuf(i*8+2).inst, ibuf_valid(i*8+2), ibuf(i*8+2).isLoop,
-        ibuf(i*8+3).inst, ibuf_valid(i*8+3), ibuf(i*8+3).isLoop,
-        ibuf(i*8+4).inst, ibuf_valid(i*8+4), ibuf(i*8+4).isLoop,
-        ibuf(i*8+5).inst, ibuf_valid(i*8+5), ibuf(i*8+5).isLoop,
-        ibuf(i*8+6).inst, ibuf_valid(i*8+6), ibuf(i*8+6).isLoop,
-        ibuf(i*8+7).inst, ibuf_valid(i*8+7), ibuf(i*8+7).isLoop
+      ibuf(i*8+0).inst, ibuf_valid(i*8+0), ibuf_isLoop(i*8+0),
+        ibuf(i*8+1).inst, ibuf_valid(i*8+1), ibuf_isLoop(i*8+1),
+        ibuf(i*8+2).inst, ibuf_valid(i*8+2), ibuf_isLoop(i*8+2),
+        ibuf(i*8+3).inst, ibuf_valid(i*8+3), ibuf_isLoop(i*8+3),
+        ibuf(i*8+4).inst, ibuf_valid(i*8+4), ibuf_isLoop(i*8+4),
+        ibuf(i*8+5).inst, ibuf_valid(i*8+5), ibuf_isLoop(i*8+5),
+        ibuf(i*8+6).inst, ibuf_valid(i*8+6), ibuf_isLoop(i*8+6),
+        ibuf(i*8+7).inst, ibuf_valid(i*8+7), ibuf_isLoop(i*8+7)
     )
   }
 
