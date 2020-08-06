@@ -126,19 +126,22 @@ class LoopBuffer extends XSModule {
 
   when(deqValid) {
     for(i <- 0 until DecodeWidth) {
+      var outWire = WireInit(ibuf(deq_idx))
+
       io.out(i).valid := ibuf_valid(deq_idx)
       when(ibuf_valid(deq_idx)) { ibuf_valid(deq_idx) := !io.out(i).fire }
       when(ibuf_isLoop(deq_idx) && LBstate === s_active) {
-        io.out(i).bits.instr := Cat(lbuf(ibuf(deq_idx).pc(7,1) + 1.U).inst, lbuf(ibuf(deq_idx).pc(7,1)).inst)
+        io.out(i).bits.instr := Cat(lbuf(outWire.pc(7,1) + 1.U).inst, lbuf(outWire.pc(7,1)).inst)
       }.otherwise {
-        io.out(i).bits.instr := ibuf(deq_idx).inst
+        io.out(i).bits.instr := outWire.inst
       }
-      io.out(i).bits.pc := ibuf(deq_idx).pc
+
+      io.out(i).bits.pc := outWire.pc
       io.out(i).bits.brUpdate := DontCare
-      io.out(i).bits.brUpdate.pc := ibuf(deq_idx).pc
-      io.out(i).bits.brUpdate.pnpc := ibuf(deq_idx).pnpc
-      io.out(i).bits.brUpdate.brInfo := ibuf(deq_idx).brInfo
-      io.out(i).bits.brUpdate.pd := ibuf(deq_idx).pd
+      io.out(i).bits.brUpdate.pc := outWire.pc
+      io.out(i).bits.brUpdate.pnpc := outWire.pnpc
+      io.out(i).bits.brUpdate.brInfo := outWire.brInfo
+      io.out(i).bits.brUpdate.pd := outWire.pd
 
       deq_idx = deq_idx + io.out(i).fire
     }
@@ -156,8 +159,11 @@ class LoopBuffer extends XSModule {
   var enq_idx = WireInit(tail_ptr)
   when(io.in.fire) {
     for(i <- 0 until PredictWidth) {
+      var inWire = Wire(new IBufEntry)
+      inWire := DontCare
+
       when(io.in.bits.mask(i)) {
-        ibuf(enq_idx).inst := io.in.bits.instrs(i)
+        inWire.inst := io.in.bits.instrs(i)
         ibuf_isLoop(enq_idx) := LBstate === s_fill// || (sbbTaken && i.U > brIdx)
         when(LBstate === s_fill/* || (sbbTaken && i.U > brIdx)*/) {
           lbuf(io.in.bits.pc(i)(7,1)).inst := io.in.bits.instrs(i)(15, 0)
@@ -167,12 +173,13 @@ class LoopBuffer extends XSModule {
             lbuf_valid(io.in.bits.pc(i)(7,1) + 1.U) := true.B
           }
         }
-        ibuf(enq_idx).pc := io.in.bits.pc(i)
-        ibuf(enq_idx).pnpc := io.in.bits.pnpc(i)
-        ibuf(enq_idx).brInfo := io.in.bits.brInfo(i)
-        ibuf(enq_idx).pd := io.in.bits.pd(i)
+        inWire.pc := io.in.bits.pc(i)
+        inWire.pnpc := io.in.bits.pnpc(i)
+        inWire.brInfo := io.in.bits.brInfo(i)
+        inWire.pd := io.in.bits.pd(i)
 
         ibuf_valid(enq_idx) := true.B
+        ibuf(enq_idx) := inWire
       }
 
       enq_idx = enq_idx + io.in.bits.mask(i)
