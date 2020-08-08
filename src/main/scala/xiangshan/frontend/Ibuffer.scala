@@ -11,7 +11,7 @@ class Ibuffer extends XSModule {
     val flush = Input(Bool())
     val in = Flipped(DecoupledIO(new FetchPacket))
     val out = Vec(DecodeWidth, DecoupledIO(new CtrlFlow))
-    // val LBredirect = ValidIO(UInt(VAddrBits.W))
+    val LBredirect = ValidIO(UInt(VAddrBits.W))
     val inLoop = Output(Bool())
   })
 

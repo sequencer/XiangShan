@@ -24,7 +24,7 @@ class IFUIO extends XSBundle
   val icacheReq = DecoupledIO(new FakeIcacheReq)
   val icacheResp = Flipped(DecoupledIO(new FakeIcacheResp))
   val icacheFlush = Output(UInt(2.W))
-  // val LBredirect = Flipped(ValidIO(UInt(VAddrBits.W)))
+  val LBredirect = Flipped(ValidIO(UInt(VAddrBits.W)))
   val inLoop = Input(Bool())
 }
 
@@ -38,7 +38,7 @@ class IFU extends XSModule with HasIFUConst
   val if2_redirect, if3_redirect, if4_redirect = WireInit(false.B)
   val if1_flush, if2_flush, if3_flush, if4_flush = WireInit(false.B)
 
-  if4_flush := io.redirect.valid// || io.LBredirect.valid
+  if4_flush := io.redirect.valid || io.LBredirect.valid
   if3_flush := if4_flush || if4_redirect
   if2_flush := if3_flush || if3_redirect
   if1_flush := if2_flush || if2_redirect
@@ -47,7 +47,7 @@ class IFU extends XSModule with HasIFUConst
   val if1_valid = !reset.asBool
   val if1_npc = WireInit(0.U(VAddrBits.W))
   val if2_ready = WireInit(false.B)
-  val if1_fire = if1_valid && (if2_ready || if1_flush) && io.icacheReq.ready
+  val if1_fire = if1_valid && (if2_ready || if1_flush) && (io.inLoop || io.icacheReq.ready)
 
   // val extHist = VecInit(Fill(ExtHistoryLength, RegInit(0.U(1.W))))
   val extHist = RegInit(VecInit(Seq.fill(ExtHistoryLength)(0.U(1.W))))
@@ -100,7 +100,7 @@ class IFU extends XSModule with HasIFUConst
   //********************** IF3 ****************************//
   val if3_valid = RegEnable(next = if2_valid, init = false.B, enable = if2_fire)
   val if4_ready = WireInit(false.B)
-  val if3_fire = if3_valid && if4_ready && io.icacheResp.valid && !if3_flush
+  val if3_fire = if3_valid && if4_ready && (io.inLoop || io.icacheResp.valid) && !if3_flush
   val if3_pc = RegEnable(if2_pc, if2_fire)
   val if3_histPtr = RegEnable(if2_histPtr, if2_fire)
   if3_ready := if3_fire || !if3_valid || if3_flush
@@ -223,16 +223,17 @@ class IFU extends XSModule with HasIFUConst
     extHist(newPtr) := io.outOfOrderBrInfo.bits.taken
   }
 
-  // when (io.LBredirect.valid) {
-  //   if1_npc := io.LBredirect.bits
-  // }
+  when (io.LBredirect.valid) {
+    if1_npc := io.LBredirect.bits
+  }
 
   when (io.redirect.valid) {
     if1_npc := io.redirect.bits.target
   }
 
-  io.icacheReq.valid := if1_valid && if2_ready
+  io.icacheReq.valid := if1_valid && if2_ready && !io.inLoop
   io.icacheReq.bits.addr := if1_npc
+  BoringUtils.addSource(if1_npc, "if1_npc")
   io.icacheResp.ready := if3_ready
   io.icacheFlush := Cat(if3_flush, if2_flush)
 
@@ -255,6 +256,7 @@ class IFU extends XSModule with HasIFUConst
   bpu.io.branchInfo.ready := if4_fire
 
   pd.io.in := io.icacheResp.bits
+  BoringUtils.addSink(pd.io.in, "pd.io.in")
   pd.io.prev.valid := prev_half_valid
   pd.io.prev.bits := prev_half_instr
 

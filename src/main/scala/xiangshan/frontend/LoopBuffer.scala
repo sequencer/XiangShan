@@ -9,7 +9,7 @@ class LoopBufferIO extends XSBundle {
   val flush = Input(Bool())
   val in = Flipped(DecoupledIO(new FetchPacket))
   val out = Vec(DecodeWidth, DecoupledIO(new CtrlFlow))
-  // val LBredirect = ValidIO(UInt(VAddrBits.W))
+  val LBredirect = ValidIO(UInt(VAddrBits.W))
   val inLoop = Output(Bool())
 }
 
@@ -26,6 +26,7 @@ class LoopBuffer extends XSModule {
 
   class LBufEntry extends XSBundle {
     val inst = UInt(16.W)
+    val pd = new PreDecodeInfo
   }
 
   // ignore
@@ -116,8 +117,8 @@ class LoopBuffer extends XSModule {
     flushIB
   }
 
-  // io.LBredirect.valid := false.B
-  // io.LBredirect.bits := DontCare
+  io.LBredirect.valid := false.B
+  io.LBredirect.bits := DontCare
 
   /*---------------*/
   /*    Dequeue    */
@@ -167,6 +168,7 @@ class LoopBuffer extends XSModule {
         ibuf_isLoop(enq_idx) := LBstate === s_fill// || (sbbTaken && i.U > brIdx)
         when(LBstate === s_fill/* || (sbbTaken && i.U > brIdx)*/) {
           lbuf(io.in.bits.pc(i)(7,1)).inst := io.in.bits.instrs(i)(15, 0)
+          lbuf(io.in.bits.pc(i)(7,1)).pd := io.in.bits.pd(i)
           lbuf_valid(io.in.bits.pc(i)(7,1)) := true.B
           when(!io.in.bits.pd(i).isRVC) {
             lbuf(io.in.bits.pc(i)(7,1) + 1.U).inst := io.in.bits.instrs(i)(31, 16)
@@ -178,11 +180,11 @@ class LoopBuffer extends XSModule {
         inWire.brInfo := io.in.bits.brInfo(i)
         inWire.pd := io.in.bits.pd(i)
 
-        ibuf_valid(enq_idx) := true.B
+        ibuf_valid(enq_idx) := Mux(LBstate =/= s_active, true.B, !(hasTsbb && !tsbbTaken && i.U > tsbbIdx))
         ibuf(enq_idx) := inWire
       }
 
-      enq_idx = enq_idx + io.in.bits.mask(i)
+      enq_idx = enq_idx + Mux(LBstate =/= s_active, io.in.bits.mask(i), io.in.bits.mask(i) && !(hasTsbb && !tsbbTaken && i.U > tsbbIdx))
     }
 
     tail_ptr := enq_idx
@@ -238,14 +240,17 @@ class LoopBuffer extends XSModule {
         when(hasTsbb && !tsbbTaken) {
           XSDebug("tsbb not taken, State change: IDLE\n")
           LBstate := s_idle
+          io.LBredirect.valid := true.B
+          io.LBredirect.bits := tsbbPC + 4.U
+          XSDebug(p"redirect pc=${Hexadecimal(tsbbPC + 4.U)}\n")
           flushLB()
         }
 
         when(brTaken && !tsbbTaken) {
           XSDebug("cof by other inst, State change: IDLE\n")
           LBstate := s_idle
-          // io.LBredirect.valid := true.B
-          // io.LBredirect.bits := io.in.bits.pc(brIdx)
+          io.LBredirect.valid := true.B
+          io.LBredirect.bits := tsbbPC + 4.U
           flushLB()
         }
       }
