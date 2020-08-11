@@ -236,7 +236,7 @@ class IFU extends XSModule with HasIFUConst
 
   io.icacheReq.valid := if1_valid && if2_ready && (io.redirect.valid || !io.inLoop)
   io.icacheReq.bits.addr := if1_npc
-  io.LBReq := if1_npc
+  io.LBReq := if3_pc
   io.icacheResp.ready := if3_ready && (io.redirect.valid || !io.inLoop)
   io.icacheFlush := Cat(if3_flush, if2_flush)
 

@@ -201,14 +201,14 @@ class LoopBuffer extends XSModule {
   // val LBReqStage1 = RegEnable(io.LBReq, 0.U(32.W), io.in.fire)
   // val LBReqStage2 = RegEnable(LBReqStage1, 0.U(32.W), io.in.fire)
   // val LBReqStage3 = RegEnable(LBReqStage2, 0.U(32.W), io.in.fire)
-  val LBReqStage1 = RegNext(io.LBReq, 0.U(32.W))
-  val LBReqStage2 = RegNext(LBReqStage1, 0.U(32.W))
+  // val LBReqStage1 = RegNext(io.LBReq, 0.U(32.W))
+  // val LBReqStage2 = RegNext(LBReqStage1, 0.U(32.W))
   // val LBReqStage3 = RegNext(LBReqStage2, 0.U(32.W))
-  XSDebug(p"io.LBReq=${Hexadecimal(io.LBReq)}, LBReqStage1=${Hexadecimal(LBReqStage1)}, LBReqStage2=${Hexadecimal(LBReqStage2)}\n")
-  // XSDebug(p"io.LBReq=${Hexadecimal(io.LBReq)}\n")
-  io.LBResp.pc := LBReqStage2
-  io.LBResp.data := Cat((31 to 0 by -1).map(i => lbuf(LBReqStage2(7,1) + i.U).inst))
-  io.LBResp.mask := Cat((31 to 0 by -1).map(i => lbuf_valid(LBReqStage2(7,1) + i.U)))
+  // XSDebug(p"io.LBReq=${Hexadecimal(io.LBReq)}, LBReqStage1=${Hexadecimal(LBReqStage1)}, LBReqStage2=${Hexadecimal(LBReqStage2)}\n")
+  XSDebug(p"io.LBReq=${Hexadecimal(io.LBReq)}\n")
+  io.LBResp.pc := io.LBReq
+  io.LBResp.data := Cat((31 to 0 by -1).map(i => lbuf(io.LBReq(7,1) + i.U).inst))
+  io.LBResp.mask := Cat((31 to 0 by -1).map(i => lbuf_valid(io.LBReq(7,1) + i.U)))
 
   /*-----------------------*/
   /*    Loop Buffer FSM    */
