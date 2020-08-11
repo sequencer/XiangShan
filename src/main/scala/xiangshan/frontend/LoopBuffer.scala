@@ -99,6 +99,10 @@ class LoopBuffer extends XSModule {
       lbuf(i).inst := 0.U // TODO: This is to make the debugging information clearer, this can be deleted
       lbuf_valid(i) := false.B
     }
+
+    for(i <- 0 until IBufSize) {
+      ibuf_isLoop(i) := false.B
+    }
   }
 
   def flushIB() = {
@@ -238,7 +242,7 @@ class LoopBuffer extends XSModule {
           }.otherwise {
             LBstate := s_idle
             XSDebug("State change: IDLE\n")
-            flushLB
+            flushLB()
           }
         }
 
@@ -246,7 +250,7 @@ class LoopBuffer extends XSModule {
           // To IDLE
           LBstate := s_idle
           XSDebug("State change: IDLE\n")
-          flushLB
+          flushLB()
         }
       }
       is(s_active) {

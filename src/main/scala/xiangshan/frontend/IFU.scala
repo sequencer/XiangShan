@@ -346,6 +346,8 @@ class IFU extends XSModule with HasIFUConst
     XSDebug(p"pc=${Hexadecimal(io.LBResp.pc)}\n")
     XSDebug(p"data=${Hexadecimal(io.LBResp.data)}\n")
     XSDebug(p"mask=${Hexadecimal(io.LBResp.mask)}\n")
+    pd.io.prev.valid := false.B
+    pd.io.prev.bits := DontCare
   }.otherwise {
     pd.io.in := io.icacheResp.bits
     pd.io.prev.valid := if3_hasPrevHalfInstr
