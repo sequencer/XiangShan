@@ -32,6 +32,8 @@ class Frontend extends XSModule {
   if(EnableLB) {
     ifu.io.inLoop := ibuffer.io.inLoop
     ifu.io.LBredirect <> ibuffer.io.LBredirect
+    ibuffer.io.LBReq := ifu.io.LBReq
+    ifu.io.LBResp <> ibuffer.io.LBResp
   }
 
   for(out <- ibuffer.io.out){

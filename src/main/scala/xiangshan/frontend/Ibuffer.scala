@@ -13,6 +13,8 @@ class Ibuffer extends XSModule {
     val out = Vec(DecodeWidth, DecoupledIO(new CtrlFlow))
     val LBredirect = ValidIO(UInt(VAddrBits.W))
     val inLoop = Output(Bool())
+    val LBReq = Input(UInt(VAddrBits.W))
+  val LBResp  = Output(new FakeIcacheResp)
   })
 
   class IBufEntry extends XSBundle {
@@ -29,6 +31,8 @@ class Ibuffer extends XSModule {
     out.bits.intrVec := DontCare
     out.bits.crossPageIPFFix := DontCare
   }
+
+  io.LBResp := DontCare
 
   // io.LBredirect.valid := false.B
   // io.LBredirect.bits := DontCare

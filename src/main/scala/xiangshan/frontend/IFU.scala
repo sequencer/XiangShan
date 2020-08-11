@@ -2,6 +2,7 @@ package xiangshan.frontend
 
 import chisel3._
 import chisel3.util._
+import chisel3.util.experimental.BoringUtils
 import device.RAMHelper
 import xiangshan._
 import utils._
@@ -24,6 +25,8 @@ class IFUIO extends XSBundle
   val icacheReq = DecoupledIO(new FakeIcacheReq)
   val icacheResp = Flipped(DecoupledIO(new FakeIcacheResp))
   val icacheFlush = Output(UInt(2.W))
+  val LBReq = Output(UInt(VAddrBits.W))
+  val LBResp  = Input(new FakeIcacheResp)
   val LBredirect = Flipped(ValidIO(UInt(VAddrBits.W)))
   val inLoop = Input(Bool())
 }
@@ -231,10 +234,10 @@ class IFU extends XSModule with HasIFUConst
     if1_npc := io.redirect.bits.target
   }
 
-  io.icacheReq.valid := if1_valid && if2_ready && !io.inLoop
+  io.icacheReq.valid := if1_valid && if2_ready && (io.redirect.valid || !io.inLoop)
   io.icacheReq.bits.addr := if1_npc
-  BoringUtils.addSource(if1_npc, "if1_npc")
-  io.icacheResp.ready := if3_ready
+  io.LBReq := if1_npc
+  io.icacheResp.ready := if3_ready && (io.redirect.valid || !io.inLoop)
   io.icacheFlush := Cat(if3_flush, if2_flush)
 
   val inOrderBrHist = Wire(Vec(HistoryLength, UInt(1.W)))
@@ -255,8 +258,16 @@ class IFU extends XSModule with HasIFUConst
   bpu.io.predecode.bits.pd := if4_pd.pd
   bpu.io.branchInfo.ready := if4_fire
 
-  pd.io.in := io.icacheResp.bits
-  BoringUtils.addSink(pd.io.in, "pd.io.in")
+  when(io.inLoop) {
+    pd.io.in := io.LBResp
+    pd.io.in.mask := io.LBResp.mask & mask(io.LBResp.pc)
+    XSDebug("Fetch from LB\n")
+    XSDebug(p"pc=${Hexadecimal(io.LBResp.pc)}\n")
+    XSDebug(p"data=${Hexadecimal(io.LBResp.data)}\n")
+    XSDebug(p"mask=${Hexadecimal(io.LBResp.mask)}\n")
+  }.otherwise {
+    pd.io.in := io.icacheResp.bits
+  }
   pd.io.prev.valid := prev_half_valid
   pd.io.prev.bits := prev_half_instr
 

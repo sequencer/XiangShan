@@ -2,6 +2,7 @@ package xiangshan.frontend
 
 import chisel3._
 import chisel3.util._
+import chisel3.util.experimental.BoringUtils
 import utils._
 import xiangshan._
 
@@ -11,6 +12,8 @@ class LoopBufferIO extends XSBundle {
   val out = Vec(DecodeWidth, DecoupledIO(new CtrlFlow))
   val LBredirect = ValidIO(UInt(VAddrBits.W))
   val inLoop = Output(Bool())
+  val LBReq = Input(UInt(VAddrBits.W))
+  val LBResp  = Output(new FakeIcacheResp)
 }
 
 class LoopBuffer extends XSModule {
@@ -26,7 +29,7 @@ class LoopBuffer extends XSModule {
 
   class LBufEntry extends XSBundle {
     val inst = UInt(16.W)
-    val pd = new PreDecodeInfo
+    // val pd = new PreDecodeInfo
   }
 
   // ignore
@@ -168,7 +171,7 @@ class LoopBuffer extends XSModule {
         ibuf_isLoop(enq_idx) := LBstate === s_fill// || (sbbTaken && i.U > brIdx)
         when(LBstate === s_fill/* || (sbbTaken && i.U > brIdx)*/) {
           lbuf(io.in.bits.pc(i)(7,1)).inst := io.in.bits.instrs(i)(15, 0)
-          lbuf(io.in.bits.pc(i)(7,1)).pd := io.in.bits.pd(i)
+          // lbuf(io.in.bits.pc(i)(7,1)).pd := io.in.bits.pd(i)
           lbuf_valid(io.in.bits.pc(i)(7,1)) := true.B
           when(!io.in.bits.pd(i).isRVC) {
             lbuf(io.in.bits.pc(i)(7,1) + 1.U).inst := io.in.bits.instrs(i)(31, 16)
@@ -194,6 +197,18 @@ class LoopBuffer extends XSModule {
   val pcStep = (0 until PredictWidth).map(i => Mux(!io.in.fire || !io.in.bits.mask(i), 0.U, Mux(io.in.bits.pd(i).isRVC, 1.U, 2.U))).fold(0.U(log2Up(16+1).W))(_+_)
   val offsetCounterWire = WireInit(offsetCounter + pcStep)
   offsetCounter := offsetCounterWire
+
+  // val LBReqStage1 = RegEnable(io.LBReq, 0.U(32.W), io.in.fire)
+  // val LBReqStage2 = RegEnable(LBReqStage1, 0.U(32.W), io.in.fire)
+  // val LBReqStage3 = RegEnable(LBReqStage2, 0.U(32.W), io.in.fire)
+  val LBReqStage1 = RegNext(io.LBReq, 0.U(32.W))
+  val LBReqStage2 = RegNext(LBReqStage1, 0.U(32.W))
+  // val LBReqStage3 = RegNext(LBReqStage2, 0.U(32.W))
+  XSDebug(p"io.LBReq=${Hexadecimal(io.LBReq)}, LBReqStage1=${Hexadecimal(LBReqStage1)}, LBReqStage2=${Hexadecimal(LBReqStage2)}\n")
+  // XSDebug(p"io.LBReq=${Hexadecimal(io.LBReq)}\n")
+  io.LBResp.pc := LBReqStage2
+  io.LBResp.data := Cat((31 to 0 by -1).map(i => lbuf(LBReqStage2(7,1) + i.U).inst))
+  io.LBResp.mask := Cat((31 to 0 by -1).map(i => lbuf_valid(LBReqStage2(7,1) + i.U)))
 
   /*-----------------------*/
   /*    Loop Buffer FSM    */
