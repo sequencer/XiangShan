@@ -6,14 +6,18 @@ import chisel3.util.experimental.BoringUtils
 import utils._
 import xiangshan._
 
+class IFUFetchIO extends XSBundle {
+  val LBReq = Input(UInt(VAddrBits.W))
+  val LBResp  = Output(new FakeIcacheResp)
+}
+
 class LoopBufferIO extends XSBundle {
   val flush = Input(Bool())
   val in = Flipped(DecoupledIO(new FetchPacket))
   val out = Vec(DecodeWidth, DecoupledIO(new CtrlFlow))
   val LBredirect = ValidIO(UInt(VAddrBits.W))
   val inLoop = Output(Bool())
-  val LBReq = Flipped(DecoupledIO(UInt(VAddrBits.W)))
-  val LBResp  = DecoupledIO(new FakeIcacheResp)
+  val IFUFetch = new IFUFetchIO
 }
 
 class LoopBuffer extends XSModule {
@@ -29,7 +33,6 @@ class LoopBuffer extends XSModule {
 
   class LBufEntry extends XSBundle {
     val inst = UInt(16.W)
-    // val pd = new PreDecodeInfo
   }
 
   // ignore
@@ -192,52 +195,9 @@ class LoopBuffer extends XSModule {
   offsetCounter := offsetCounterWire
 
   // IFU fetch from LB
-
-  //----------
-  //  Stage1
-  //----------
-  val s1_valid = io.LBReq.valid
-  val s2_ready = WireInit(false.B)
-  val s1_fire = s1_valid && s2_ready
-  io.LBReq.ready := s2_ready
-
-  XSDebug("[LB-Stage1] s1_valid:%d || s2_ready:%d || s1_pc:%x",s1_valid,s2_ready,io.LBReq.bits)
-  XSDebug(false,s1_fire,"------> s1 fire!!!")
-  XSDebug(false,true.B,"\n")
-
-  //----------
-  //  Stage2
-  //----------
-  val s2_valid = RegEnable(next=s1_valid,init=false.B,enable=s1_fire)
-  val s3_ready = WireInit(false.B)
-  val s2_fire  = s2_valid && s3_ready
-  val s2_pc = RegEnable(next = io.LBReq.bits, enable = s1_fire)
-
-  s2_ready := s2_fire || !s2_valid || io.flush
-
-  XSDebug("[LB-Stage2] s2_valid:%d || s3_ready:%d ",s2_valid,s3_ready)
-  XSDebug(false,s2_fire,"------> s2 fire!!!")
-  XSDebug(false,true.B,"\n")
-
-  //----------
-  //  Stage3
-  //----------
-  val s3_valid = RegEnable(next=s2_valid,init=false.B,enable=s2_fire)
-  val s3_pc = RegEnable(next=s2_pc, enable = s2_fire)
-  s3_ready := !s3_valid || io.out.fire() || io.flush
-  io.LBResp.valid := s3_valid
-
-  io.LBResp.bits.pc := s3_pc
-  io.LBResp.bits.data := Cat((31 to 0 by -1).map(i => lbuf(s3_pc(7,1) + i.U).inst))
-  io.LBResp.bits.mask := Cat((31 to 0 by -1).map(i => lbuf_valid(s3_pc(7,1) + i.U)))
-
-  XSDebug("[LB-Stage3] s3_valid:%d || s3_ready:%d ",s3_valid,s3_ready)
-  XSDebug(false,true.B,"\n")
-
-  when(io.flush) {
-    s2_valid := s1_fire
-    s3_valid := false.B
-  }
+  io.IFUFetch.LBResp.pc := io.IFUFetch.LBReq
+  io.IFUFetch.LBResp.data := Cat((31 to 0 by -1).map(i => lbuf(io.IFUFetch.LBReq(7,1) + i.U).inst))
+  io.IFUFetch.LBResp.mask := Cat((31 to 0 by -1).map(i => lbuf_valid(io.IFUFetch.LBReq(7,1) + i.U)))
 
   /*-----------------------*/
   /*    Loop Buffer FSM    */
@@ -293,6 +253,9 @@ class LoopBuffer extends XSModule {
         when(brTaken && !tsbbTaken) {
           XSDebug("cof by other inst, State change: IDLE\n")
           LBstate := s_idle
+          io.LBredirect.valid := true.B
+          io.LBredirect.bits := io.IFUFetch.LBReq
+          XSDebug(p"redirect pc=${Hexadecimal(io.IFUFetch.LBReq)}\n")
           flushLB()
         }
       }

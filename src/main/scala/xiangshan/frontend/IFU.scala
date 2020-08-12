@@ -25,12 +25,10 @@ class IFUIO extends XSBundle
   val icacheReq = DecoupledIO(new FakeIcacheReq)
   val icacheResp = Flipped(DecoupledIO(new FakeIcacheResp))
   val icacheFlush = Output(UInt(2.W))
-  val LBReq = DecoupledIO(UInt(VAddrBits.W))
-  val LBResp  = Flipped(DecoupledIO(new FakeIcacheResp))
+  val LBFetch = Flipped(new IFUFetchIO)
   val LBredirect = Flipped(ValidIO(UInt(VAddrBits.W)))
   val inLoop = Input(Bool())
 }
-
 
 class IFU extends XSModule with HasIFUConst
 {
@@ -311,11 +309,15 @@ class IFU extends XSModule with HasIFUConst
     if1_npc := io.redirect.bits.target
   }
 
-  io.icacheReq.valid := if1_valid && if2_ready && (io.redirect.valid || !io.inLoop || io.LBredirect.valid)
+  when(io.inLoop) {
+    io.icacheReq.valid := if4_flush
+    io.icacheResp.ready := false.B
+  }.otherwise {
+    io.icacheReq.valid := if1_valid && if2_ready
+    io.icacheResp.ready := if3_ready
+  }
   io.icacheReq.bits.addr := if1_npc
-  io.LBReq.valid := if1_valid && if2_ready && (io.redirect.valid || !io.inLoop || io.LBredirect.valid)
-  io.LBReq.bits := if1_npc
-  io.icacheResp.ready := if3_ready && (io.redirect.valid || !io.inLoop)
+  io.LBFetch.LBReq := if4_bp.target
   io.icacheFlush := Cat(if3_flush, if2_flush)
 
   val inOrderBrHist = Wire(Vec(HistoryLength, UInt(1.W)))
@@ -341,13 +343,12 @@ class IFU extends XSModule with HasIFUConst
   bpu.io.branchInfo.ready := if4_fire
 
   when(io.inLoop) {
-    io.LBResp.ready := if3_ready && io.redirect.valid
-    pd.io.in := io.LBResp.bits
-    pd.io.in.mask := io.LBResp.bits.mask & mask(io.LBResp.pc)
+    pd.io.in := io.LBFetch.LBResp
+    pd.io.in.mask := io.LBFetch.LBResp.mask & mask(io.LBFetch.LBResp.pc)
     XSDebug("Fetch from LB\n")
-    XSDebug(p"pc=${Hexadecimal(io.LBResp.bits.pc)}\n")
-    XSDebug(p"data=${Hexadecimal(io.LBResp.bits.data)}\n")
-    XSDebug(p"mask=${Hexadecimal(io.LBResp.bits.mask)}\n")
+    XSDebug(p"pc=${Hexadecimal(io.LBFetch.LBResp.pc)}\n")
+    XSDebug(p"data=${Hexadecimal(io.LBFetch.LBResp.data)}\n")
+    XSDebug(p"mask=${Hexadecimal(io.LBFetch.LBResp.mask)}\n")
     pd.io.prev.valid := false.B
     pd.io.prev.bits := DontCare
   }.otherwise {

@@ -14,7 +14,7 @@ class Ibuffer extends XSModule {
     val LBredirect = ValidIO(UInt(VAddrBits.W))
     val inLoop = Output(Bool())
     val LBReq = Input(UInt(VAddrBits.W))
-  val LBResp  = Output(new FakeIcacheResp)
+    val LBResp  = Output(new FakeIcacheResp)
   })
 
   class IBufEntry extends XSBundle {

@@ -13,7 +13,8 @@ class Frontend extends XSModule {
 
   val ifu = Module(new IFU)
   val fakeicache = Module(new FakeCache)
-  val ibuffer = if(EnableLB) Module(new LoopBuffer) else Module(new Ibuffer)
+  // val ibuffer = if(EnableLB) Module(new LoopBuffer) else Module(new Ibuffer)
+  val ibuffer = Module(new LoopBuffer)
 
   val needFlush = io.backend.redirect.valid
 
@@ -32,8 +33,7 @@ class Frontend extends XSModule {
   if(EnableLB) {
     ifu.io.inLoop := ibuffer.io.inLoop
     ifu.io.LBredirect <> ibuffer.io.LBredirect
-    ibuffer.io.LBReq := ifu.io.LBReq
-    ifu.io.LBResp <> ibuffer.io.LBResp
+    ifu.io.LBFetch <> ibuffer.io.IFUFetch
   }
 
   for(out <- ibuffer.io.out){
