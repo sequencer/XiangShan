@@ -25,8 +25,8 @@ class IFUIO extends XSBundle
   val icacheReq = DecoupledIO(new FakeIcacheReq)
   val icacheResp = Flipped(DecoupledIO(new FakeIcacheResp))
   val icacheFlush = Output(UInt(2.W))
-  val LBReq = Output(UInt(VAddrBits.W))
-  val LBResp  = Input(new FakeIcacheResp)
+  val LBReq = DecoupledIO(UInt(VAddrBits.W))
+  val LBResp  = Flipped(DecoupledIO(new FakeIcacheResp))
   val LBredirect = Flipped(ValidIO(UInt(VAddrBits.W)))
   val inLoop = Input(Bool())
 }
@@ -311,9 +311,10 @@ class IFU extends XSModule with HasIFUConst
     if1_npc := io.redirect.bits.target
   }
 
-  io.icacheReq.valid := if1_valid && if2_ready && (io.redirect.valid || !io.inLoop)
+  io.icacheReq.valid := if1_valid && if2_ready && (io.redirect.valid || !io.inLoop || io.LBredirect.valid)
   io.icacheReq.bits.addr := if1_npc
-  io.LBReq := if3_pc
+  io.LBReq.valid := if1_valid && if2_ready && (io.redirect.valid || !io.inLoop || io.LBredirect.valid)
+  io.LBReq.bits := if1_npc
   io.icacheResp.ready := if3_ready && (io.redirect.valid || !io.inLoop)
   io.icacheFlush := Cat(if3_flush, if2_flush)
 
@@ -340,12 +341,13 @@ class IFU extends XSModule with HasIFUConst
   bpu.io.branchInfo.ready := if4_fire
 
   when(io.inLoop) {
-    pd.io.in := io.LBResp
-    pd.io.in.mask := io.LBResp.mask & mask(io.LBResp.pc)
+    io.LBResp.ready := if3_ready && io.redirect.valid
+    pd.io.in := io.LBResp.bits
+    pd.io.in.mask := io.LBResp.bits.mask & mask(io.LBResp.pc)
     XSDebug("Fetch from LB\n")
-    XSDebug(p"pc=${Hexadecimal(io.LBResp.pc)}\n")
-    XSDebug(p"data=${Hexadecimal(io.LBResp.data)}\n")
-    XSDebug(p"mask=${Hexadecimal(io.LBResp.mask)}\n")
+    XSDebug(p"pc=${Hexadecimal(io.LBResp.bits.pc)}\n")
+    XSDebug(p"data=${Hexadecimal(io.LBResp.bits.data)}\n")
+    XSDebug(p"mask=${Hexadecimal(io.LBResp.bits.mask)}\n")
     pd.io.prev.valid := false.B
     pd.io.prev.bits := DontCare
   }.otherwise {
