@@ -7,6 +7,17 @@ import chisel3.ExcitingUtils._
 import utils._
 import xiangshan._
 
+trait HasLoopBufferParameter extends HasXSParameter {
+  val immLen = 12 // J-type and B-type max imm length = 12
+  val offsetLen = log2Up(IBufSize) + 1
+  val offsetBitPat = "1"*(immLen - offsetLen) + "?"*offsetLen
+  val jalBitPat = "b1" + offsetBitPat.substring(2, 12) + offsetBitPat(1) + "1111111" + offsetBitPat(0) + "?????" + "1101111"
+  val brBitPat = "b" + offsetBitPat(0) + offsetBitPat.substring(2, 8) + "?????????????" + offsetBitPat.substring(8, 12) + offsetBitPat(1) + "1100011"
+
+  val LoopBufferSize = IBufSize * 2
+  val LoopBufferIdxLen = log2Up(LoopBufferSize)
+}
+
 class IFUFetchIO extends XSBundle {
   val LBReq = Input(UInt(VAddrBits.W))
   val LBResp  = Output(new FakeIcacheResp)
@@ -21,7 +32,7 @@ class LoopBufferIO extends XSBundle {
   val IFUFetch = new IFUFetchIO
 }
 
-class LoopBuffer extends XSModule {
+class LoopBuffer extends XSModule with HasLoopBufferParameter{
   val io = IO(new LoopBufferIO)
 
   class IBufEntry extends XSBundle {
@@ -32,7 +43,7 @@ class LoopBuffer extends XSModule {
     val pd = new PreDecodeInfo
   }
 
-  class LBufEntry extends XSBundle {
+  class LoopBufEntry extends XSBundle {
     val inst = UInt(16.W)
   }
 
@@ -45,28 +56,24 @@ class LoopBuffer extends XSModule {
 
   // Check Short Backward Branch
   def isSBB(inst: UInt): Bool = {
-    inst === BitPat("b1111_???????_111111111_?????_1101111") || inst === BitPat("b1111???_?????_?????_???_????1_1100011")
+    assert(IBufSize <= 1024)
+    inst === BitPat(jalBitPat) || inst === BitPat(brBitPat)
   }
 
   // Get sbb target
   def SBBOffset(inst: UInt): UInt = {
-    val isJal = inst === BitPat("b1111_???????_111111111_?????_1101111")
-    val isCon = inst === BitPat("b1111???_?????_?????_???_????1_1100011")
-    Mux(isJal, inst(27, 21), Mux(isCon, Cat(inst(27,25), inst(11,8)), 0.U(7.W)))
+    assert(IBufSize <= 1024)
+    val isJal = inst === BitPat(jalBitPat)
+    val isCon = inst === BitPat(brBitPat)
+    Mux(isJal, Cat(Cat(inst(12), inst(20)), inst(27, 21))(LoopBufferIdxLen-1, 0), 
+      Mux(isCon, Cat(Cat(Cat(inst(31), inst(7)), inst(30, 25)), inst(11, 8))(LoopBufferIdxLen-1, 0), 0.U(LoopBufferIdxLen.W)))
   }
-
-  // FIXME: Can be replace by isBr
-  // def isBranch(inst: UInt): Bool = {
-  //   inst === BitPat("b????????????????????_?????_1101111") || 
-  //   inst === BitPat("b????????????????????_?????_1100111") || 
-  //   inst === BitPat("b???????_?????_?????_???_?????_1100011")
-  // }
 
   // predTaken to OH
   val predTakenVec = Mux(io.in.bits.predTaken, Reverse(PriorityEncoderOH(Reverse(io.in.bits.mask))), 0.U(PredictWidth.W))
 
   // Loop detect register
-  val offsetCounter = Reg(UInt((log2Up(IBufSize)+2).W))
+  val offsetCounter = Reg(UInt((LoopBufferIdxLen+1).W))
   val tsbbPC = RegInit(0.U(VAddrBits.W))
 
   val brTaken = ParallelOR((0 until PredictWidth).map(i => io.in.fire && io.in.bits.mask(i) && predTakenVec(i))).asBool()
@@ -88,8 +95,8 @@ class LoopBuffer extends XSModule {
   val deqValid = !io.flush && ibuf_valid(head_ptr)
 
   // LoopBuffer define
-  val lbuf = Mem(IBufSize*2, new LBufEntry)
-  val lbuf_valid = RegInit(VecInit(Seq.fill(IBufSize*2)(false.B)))
+  val loopBuf = Mem(LoopBufferSize, new LoopBufEntry)
+  val loopBuf_valid = RegInit(VecInit(Seq.fill(LoopBufferSize)(false.B)))
 
   // FSM state define
   val s_idle :: s_fill :: s_active :: Nil = Enum(3)
@@ -98,9 +105,9 @@ class LoopBuffer extends XSModule {
   io.inLoop := LBstate === s_active
 
   def flushLB() = {
-    for(i <- 0 until IBufSize*2) {
-      lbuf(i).inst := 0.U // TODO: This is to make the debugging information clearer, this can be deleted
-      lbuf_valid(i) := false.B
+    for(i <- 0 until LoopBufferSize) {
+      loopBuf(i).inst := 0.U // TODO: This is to make the debugging information clearer, this can be deleted
+      loopBuf_valid(i) := false.B
     }
   }
 
@@ -108,7 +115,8 @@ class LoopBuffer extends XSModule {
     for(i <- 0 until IBufSize) {
       ibuf(i).inst := 0.U // TODO: This is to make the debugging information clearer, this can be deleted
       ibuf(i).pc := 0.U // TODO: This is to make the debugging information clearer, this can be deleted
-      lbuf(i).inst := 0.U // TODO: This is to make the debugging information clearer, this can be deleted
+      loopBuf(2*i).inst := 0.U // TODO: This is to make the debugging information clearer, this can be deleted
+      loopBuf(2*i+1).inst := 0.U // TODO: This is to make the debugging information clearer, this can be deleted
       ibuf_valid(i) := false.B
     }
     head_ptr := 0.U
@@ -169,12 +177,12 @@ class LoopBuffer extends XSModule {
       when(io.in.bits.mask(i)) {
         inWire.inst := io.in.bits.instrs(i)
         when(LBstate === s_fill/* || (sbbTaken && i.U > brIdx)*/) {
-          lbuf(io.in.bits.pc(i)(7,1)).inst := io.in.bits.instrs(i)(15, 0)
-          // lbuf(io.in.bits.pc(i)(7,1)).pd := io.in.bits.pd(i)
-          lbuf_valid(io.in.bits.pc(i)(7,1)) := true.B
+          loopBuf(io.in.bits.pc(i)(LoopBufferIdxLen,1)).inst := io.in.bits.instrs(i)(15, 0)
+          // loopBuf(io.in.bits.pc(i)(LoopBufferIdxLen,1)).pd := io.in.bits.pd(i)
+          loopBuf_valid(io.in.bits.pc(i)(LoopBufferIdxLen,1)) := true.B
           when(!io.in.bits.pd(i).isRVC) {
-            lbuf(io.in.bits.pc(i)(7,1) + 1.U).inst := io.in.bits.instrs(i)(31, 16)
-            lbuf_valid(io.in.bits.pc(i)(7,1) + 1.U) := true.B
+            loopBuf(io.in.bits.pc(i)(LoopBufferIdxLen,1) + 1.U).inst := io.in.bits.instrs(i)(31, 16)
+            loopBuf_valid(io.in.bits.pc(i)(LoopBufferIdxLen,1) + 1.U) := true.B
           }
         }
         inWire.pc := io.in.bits.pc(i)
@@ -193,14 +201,14 @@ class LoopBuffer extends XSModule {
   }
 
   // This is ugly
-  val pcStep = (0 until PredictWidth).map(i => Mux(!io.in.fire || !io.in.bits.mask(i), 0.U, Mux(io.in.bits.pd(i).isRVC, 1.U, 2.U))).fold(0.U(log2Up(16+1).W))(_+_)
+  val pcStep = ParallelADD((0 until PredictWidth).map(i => Mux(!io.in.fire || !io.in.bits.mask(i), 0.U(log2Up(PredictWidth+1).W), Mux(io.in.bits.pd(i).isRVC, 1.U(log2Up(PredictWidth+1).W), 2.U(log2Up(PredictWidth+1).W)))))
   val offsetCounterWire = WireInit(offsetCounter + pcStep)
   offsetCounter := offsetCounterWire
 
   // IFU fetch from LB
   io.IFUFetch.LBResp.pc := io.IFUFetch.LBReq
-  io.IFUFetch.LBResp.data := Cat((31 to 0 by -1).map(i => lbuf(io.IFUFetch.LBReq(7,1) + i.U).inst))
-  io.IFUFetch.LBResp.mask := Cat((31 to 0 by -1).map(i => lbuf_valid(io.IFUFetch.LBReq(7,1) + i.U)))
+  io.IFUFetch.LBResp.data := Cat((31 to 0 by -1).map(i => loopBuf(io.IFUFetch.LBReq(LoopBufferIdxLen,1) + i.U).inst))
+  io.IFUFetch.LBResp.mask := Cat((31 to 0 by -1).map(i => loopBuf_valid(io.IFUFetch.LBReq(LoopBufferIdxLen,1) + i.U)))
 
   /*-----------------------*/
   /*    Loop Buffer FSM    */
@@ -223,7 +231,7 @@ class LoopBuffer extends XSModule {
       is(s_fill) {
         // To AVTIVE
         // triggering sbb 造成cof
-        when(offsetCounterWire((log2Up(IBufSize)+2)-1) === 0.U){
+        when(offsetCounterWire(LoopBufferIdxLen) === 0.U){
           when(hasTsbb && tsbbTaken) {
             LBstate := s_active
             XSDebug("State change: ACTIVE\n")
@@ -310,16 +318,16 @@ class LoopBuffer extends XSModule {
   }
 
   XSDebug("LoopBuffer:\n")
-  for(i <- 0 until IBufSize*2/8) {
+  for(i <- 0 until LoopBufferSize/8) {
     XSDebug("%x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b\n",
-      lbuf(i*8+0).inst, lbuf_valid(i*8+0),
-        lbuf(i*8+1).inst, lbuf_valid(i*8+1),
-        lbuf(i*8+2).inst, lbuf_valid(i*8+2),
-        lbuf(i*8+3).inst, lbuf_valid(i*8+3),
-        lbuf(i*8+4).inst, lbuf_valid(i*8+4),
-        lbuf(i*8+5).inst, lbuf_valid(i*8+5),
-        lbuf(i*8+6).inst, lbuf_valid(i*8+6),
-        lbuf(i*8+7).inst, lbuf_valid(i*8+7)
+      loopBuf(i*8+0).inst, loopBuf_valid(i*8+0),
+        loopBuf(i*8+1).inst, loopBuf_valid(i*8+1),
+        loopBuf(i*8+2).inst, loopBuf_valid(i*8+2),
+        loopBuf(i*8+3).inst, loopBuf_valid(i*8+3),
+        loopBuf(i*8+4).inst, loopBuf_valid(i*8+4),
+        loopBuf(i*8+5).inst, loopBuf_valid(i*8+5),
+        loopBuf(i*8+6).inst, loopBuf_valid(i*8+6),
+        loopBuf(i*8+7).inst, loopBuf_valid(i*8+7)
     )
   }
 }
