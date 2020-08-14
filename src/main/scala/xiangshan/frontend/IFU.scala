@@ -317,7 +317,11 @@ class IFU extends XSModule with HasIFUConst
     io.icacheResp.ready := if3_ready
   }
   io.icacheReq.bits.addr := if1_npc
-  io.LBFetch.LBReq := if4_bp.target
+  when(if4_bp.saveHalfRVI) {
+    io.LBFetch.LBReq := snpc(if4_pc)
+  }.otherwise {
+    io.LBFetch.LBReq := if4_bp.target
+  }
   io.icacheFlush := Cat(if3_flush, if2_flush)
 
   val inOrderBrHist = Wire(Vec(HistoryLength, UInt(1.W)))
