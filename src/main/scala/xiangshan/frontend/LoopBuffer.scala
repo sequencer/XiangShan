@@ -81,8 +81,8 @@ class LoopBuffer extends XSModule with HasLoopBufferParameter{
   val sbbTaken = brTaken && isSBB(io.in.bits.instrs(brIdx))
 
   val tsbbVec = (0 until PredictWidth).map(i => io.in.fire && io.in.bits.mask(i) && io.in.bits.pc(i) === tsbbPC)
-  val hasTsbb = ParallelOR(tsbbVec).asBool()
   val tsbbIdx = OHToUInt(VecInit(tsbbVec).asUInt)
+  val hasTsbb = ParallelOR(tsbbVec).asBool()
   val tsbbTaken = brTaken && io.in.bits.pc(brIdx) === tsbbPC
 
   // IBuffer define
@@ -220,9 +220,6 @@ class LoopBuffer extends XSModule with HasLoopBufferParameter{
         when(sbbTaken) {
           LBstate := s_fill
           XSDebug("State change: FILL\n")
-          // This is ugly
-          // offsetCounter := Cat("b1".U, SBBOffset(io.in.bits.instrs(brIdx))) + 
-          //   (0 until PredictWidth).map(i => Mux(!io.in.bits.mask(i) || i.U < brIdx, 0.U, Mux(io.in.bits.pd(i).isRVC, 1.U, 2.U))).fold(0.U(log2Up(16+1).W))(_+_)
           offsetCounter := Cat("b1".U, SBBOffset(io.in.bits.instrs(brIdx)))
           tsbbPC := io.in.bits.pc(brIdx)
         }
@@ -250,24 +247,31 @@ class LoopBuffer extends XSModule with HasLoopBufferParameter{
       }
       is(s_active) {
         // To IDLE
-        // triggering sbb不跳转 退出循环
         // ExcitingUtils.addSource(hasTsbb && !tsbbTaken, "CntExitLoop", Perf)
-        when(hasTsbb && !tsbbTaken) {
+        when(hasTsbb && brTaken && brIdx < tsbbIdx) {
+          XSDebug("tsbb and cof in same fetchPacket\n")
+          LBstate := s_idle
+          io.LBredirect.valid := true.B
+          io.LBredirect.bits := io.IFUFetch.LBReq
+          XSDebug(p"redirect pc=${Hexadecimal(io.IFUFetch.LBReq)}\n")
+          flushLB()
+
+        }.elsewhen(hasTsbb && !tsbbTaken) {
           XSDebug("tsbb not taken, State change: IDLE\n")
           LBstate := s_idle
           io.LBredirect.valid := true.B
           io.LBredirect.bits := tsbbPC + 4.U
           XSDebug(p"redirect pc=${Hexadecimal(tsbbPC + 4.U)}\n")
           flushLB()
-        }
 
-        when(brTaken && !tsbbTaken) {
+        }.elsewhen(brTaken && !tsbbTaken) {
           XSDebug("cof by other inst, State change: IDLE\n")
           LBstate := s_idle
           io.LBredirect.valid := true.B
           io.LBredirect.bits := io.IFUFetch.LBReq
           XSDebug(p"redirect pc=${Hexadecimal(io.IFUFetch.LBReq)}\n")
           flushLB()
+
         }
       }
     }
@@ -317,17 +321,17 @@ class LoopBuffer extends XSModule with HasLoopBufferParameter{
     )
   }
 
-  // XSDebug("LoopBuffer:\n")
-  // for(i <- 0 until LoopBufferSize/8) {
-  //   XSDebug("%x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b\n",
-  //     loopBuf(i*8+0).inst, loopBuf_valid(i*8+0),
-  //       loopBuf(i*8+1).inst, loopBuf_valid(i*8+1),
-  //       loopBuf(i*8+2).inst, loopBuf_valid(i*8+2),
-  //       loopBuf(i*8+3).inst, loopBuf_valid(i*8+3),
-  //       loopBuf(i*8+4).inst, loopBuf_valid(i*8+4),
-  //       loopBuf(i*8+5).inst, loopBuf_valid(i*8+5),
-  //       loopBuf(i*8+6).inst, loopBuf_valid(i*8+6),
-  //       loopBuf(i*8+7).inst, loopBuf_valid(i*8+7)
-  //   )
-  // }
+  XSDebug("LoopBuffer:\n")
+  for(i <- 0 until LoopBufferSize/8) {
+    XSDebug("%x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b\n",
+      loopBuf(i*8+0).inst, loopBuf_valid(i*8+0),
+        loopBuf(i*8+1).inst, loopBuf_valid(i*8+1),
+        loopBuf(i*8+2).inst, loopBuf_valid(i*8+2),
+        loopBuf(i*8+3).inst, loopBuf_valid(i*8+3),
+        loopBuf(i*8+4).inst, loopBuf_valid(i*8+4),
+        loopBuf(i*8+5).inst, loopBuf_valid(i*8+5),
+        loopBuf(i*8+6).inst, loopBuf_valid(i*8+6),
+        loopBuf(i*8+7).inst, loopBuf_valid(i*8+7)
+    )
+  }
 }

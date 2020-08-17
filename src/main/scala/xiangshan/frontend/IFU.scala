@@ -349,10 +349,10 @@ class IFU extends XSModule with HasIFUConst
   when(io.inLoop) {
     pd.io.in := io.LBFetch.LBResp
     pd.io.in.mask := io.LBFetch.LBResp.mask & mask(io.LBFetch.LBResp.pc)
-    // XSDebug("Fetch from LB\n")
-    // XSDebug(p"pc=${Hexadecimal(io.LBFetch.LBResp.pc)}\n")
-    // XSDebug(p"data=${Hexadecimal(io.LBFetch.LBResp.data)}\n")
-    // XSDebug(p"mask=${Hexadecimal(io.LBFetch.LBResp.mask)}\n")
+    XSDebug("Fetch from LB\n")
+    XSDebug(p"pc=${Binary(io.LBFetch.LBResp.pc)}\n")
+    XSDebug(p"data=${Hexadecimal(io.LBFetch.LBResp.data)}\n")
+    XSDebug(p"mask=${Hexadecimal(io.LBFetch.LBResp.mask)}\n")
   }.otherwise {
     pd.io.in := io.icacheResp.bits
   }
