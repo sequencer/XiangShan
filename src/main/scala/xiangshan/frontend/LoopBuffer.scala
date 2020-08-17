@@ -200,7 +200,6 @@ class LoopBuffer extends XSModule with HasLoopBufferParameter{
     tail_ptr := enq_idx
   }
 
-  // This is ugly
   val pcStep = ParallelADD((0 until PredictWidth).map(i => Mux(!io.in.fire || !io.in.bits.mask(i), 0.U(log2Up(PredictWidth+1).W), Mux(io.in.bits.pd(i).isRVC, 1.U(log2Up(PredictWidth+1).W), 2.U(log2Up(PredictWidth+1).W)))))
   val offsetCounterWire = WireInit(offsetCounter + pcStep)
   offsetCounter := offsetCounterWire
@@ -318,17 +317,17 @@ class LoopBuffer extends XSModule with HasLoopBufferParameter{
     )
   }
 
-  XSDebug("LoopBuffer:\n")
-  for(i <- 0 until LoopBufferSize/8) {
-    XSDebug("%x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b\n",
-      loopBuf(i*8+0).inst, loopBuf_valid(i*8+0),
-        loopBuf(i*8+1).inst, loopBuf_valid(i*8+1),
-        loopBuf(i*8+2).inst, loopBuf_valid(i*8+2),
-        loopBuf(i*8+3).inst, loopBuf_valid(i*8+3),
-        loopBuf(i*8+4).inst, loopBuf_valid(i*8+4),
-        loopBuf(i*8+5).inst, loopBuf_valid(i*8+5),
-        loopBuf(i*8+6).inst, loopBuf_valid(i*8+6),
-        loopBuf(i*8+7).inst, loopBuf_valid(i*8+7)
-    )
-  }
+  // XSDebug("LoopBuffer:\n")
+  // for(i <- 0 until LoopBufferSize/8) {
+  //   XSDebug("%x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b | %x v:%b\n",
+  //     loopBuf(i*8+0).inst, loopBuf_valid(i*8+0),
+  //       loopBuf(i*8+1).inst, loopBuf_valid(i*8+1),
+  //       loopBuf(i*8+2).inst, loopBuf_valid(i*8+2),
+  //       loopBuf(i*8+3).inst, loopBuf_valid(i*8+3),
+  //       loopBuf(i*8+4).inst, loopBuf_valid(i*8+4),
+  //       loopBuf(i*8+5).inst, loopBuf_valid(i*8+5),
+  //       loopBuf(i*8+6).inst, loopBuf_valid(i*8+6),
+  //       loopBuf(i*8+7).inst, loopBuf_valid(i*8+7)
+  //   )
+  // }
 }
