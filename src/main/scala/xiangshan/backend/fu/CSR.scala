@@ -759,9 +759,10 @@ class CSR extends FunctionUnit(csrCfg) with HasCSRConst{
     "MbpIRight"   -> (0xb0a, "perfCntCondMbpIRight"   ),
     "MbpIWrong"   -> (0xb0b, "perfCntCondMbpIWrong"   ),
     "MbpRRight"   -> (0xb0c, "perfCntCondMbpRRight"   ),
-    "MbpRWrong"   -> (0xb0d, "perfCntCondMbpRWrong"   ),
-    "FetchICache" -> (0xb0e, "CntFetchFromICache"     ),
-    "FetchLB"     -> (0xb0f, "CntFetchFromLoopBuffer" )
+    "MbpRWrong"   -> (0xb0d, "perfCntCondMbpRWrong"   )//,
+    // "FetchICache" -> (0xb0e, "CntFetchFromICache"     ),
+    // "FetchLB"     -> (0xb0f, "CntFetchFromLoopBuffer" ),
+    // "ExitLoop"    -> (0xb10, "CntExitLoop" )
 //    "Custom1"     -> (0xb1b, "Custom1"             ),
 //    "Custom2"     -> (0xb1c, "Custom2"             ),
 //    "Custom3"     -> (0xb1d, "Custom3"             ),

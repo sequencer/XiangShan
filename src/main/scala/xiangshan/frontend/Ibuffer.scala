@@ -7,15 +7,7 @@ import xiangshan._
 import utils._
 
 class Ibuffer extends XSModule {
-  val io = IO(new Bundle() {
-    val flush = Input(Bool())
-    val in = Flipped(DecoupledIO(new FetchPacket))
-    val out = Vec(DecodeWidth, DecoupledIO(new CtrlFlow))
-    val LBredirect = ValidIO(UInt(VAddrBits.W))
-    val inLoop = Output(Bool())
-    val LBReq = Input(UInt(VAddrBits.W))
-    val LBResp  = Output(new FakeIcacheResp)
-  })
+  val io = IO(new LoopBufferIO)
 
   class IBufEntry extends XSBundle {
     val inst = UInt(32.W)
@@ -32,11 +24,10 @@ class Ibuffer extends XSModule {
     out.bits.crossPageIPFFix := DontCare
   }
 
-  io.LBResp := DontCare
-
-  // io.LBredirect.valid := false.B
-  // io.LBredirect.bits := DontCare
   io.inLoop := false.B
+  io.IFUFetch := DontCare
+  io.LBredirect.valid := false.B
+  io.LBredirect.bits := DontCare
 
   // Ibuffer define
   val ibuf = Mem(IBufSize, new IBufEntry)

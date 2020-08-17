@@ -168,8 +168,8 @@ class LoopBuffer extends XSModule with HasLoopBufferParameter{
 
   var enq_idx = WireInit(tail_ptr)
   when(io.in.fire) {
-    ExcitingUtils.addSource(LBstate =/= s_active, "CntFetchFromICache", Perf)
-    ExcitingUtils.addSource(LBstate === s_active, "CntFetchFromLoopBuffer", Perf)
+    // ExcitingUtils.addSource(LBstate =/= s_active, "CntFetchFromICache", Perf)
+    // ExcitingUtils.addSource(LBstate === s_active, "CntFetchFromLoopBuffer", Perf)
     for(i <- 0 until PredictWidth) {
       var inWire = Wire(new IBufEntry)
       inWire := DontCare
@@ -252,6 +252,7 @@ class LoopBuffer extends XSModule with HasLoopBufferParameter{
       is(s_active) {
         // To IDLE
         // triggering sbb不跳转 退出循环
+        // ExcitingUtils.addSource(hasTsbb && !tsbbTaken, "CntExitLoop", Perf)
         when(hasTsbb && !tsbbTaken) {
           XSDebug("tsbb not taken, State change: IDLE\n")
           LBstate := s_idle
