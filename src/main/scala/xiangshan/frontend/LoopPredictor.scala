@@ -100,7 +100,8 @@ class LTBColumn extends LTBModule {
   when (io.update.valid && io.update.bits.misPred) { valid := false.B }
 
   io.resp.meta := if4_entry.specCnt + 1.U
-  io.resp.exit := if4_tag === if4_entry.tag && (if4_entry.specCnt + 1.U) === if4_entry.tripCnt && valid && !if4_entry.unusable
+  // io.resp.exit := if4_tag === if4_entry.tag && (if4_entry.specCnt + 1.U) === if4_entry.tripCnt && valid && !if4_entry.unusable
+  io.resp.exit := if4_tag === if4_entry.tag && (if4_entry.specCnt + 1.U) === if4_entry.tripCnt && valid && if4_entry.isConf
 
   // when resolving a branch
   val entry = ltb(updateIdx)
@@ -116,8 +117,8 @@ class LTBColumn extends LTBModule {
       wEntry.conf := 0.U
       wEntry.age := 7.U
       wEntry.tripCnt := Fill(cntBits, 1.U(1.W))
-      wEntry.specCnt := 1.U
-      wEntry.nSpecCnt := 1.U
+      wEntry.specCnt := Mux(io.update.bits.taken, 1.U, 0.U)
+      wEntry.nSpecCnt := Mux(io.update.bits.taken, 1.U, 0.U)
       wEntry.brTag := updateBrTag
       wEntry.unusable := false.B
       ltb(updateIdx) := wEntry
@@ -126,10 +127,14 @@ class LTBColumn extends LTBModule {
       when (io.update.bits.taken) {
         wEntry.nSpecCnt := entry.nSpecCnt + 1.U
         wEntry.specCnt := Mux(io.update.bits.misPred/* && !entry.brTag.needBrFlush(updateBrTag)*/, entry.nSpecCnt + 1.U, entry.specCnt)
+        wEntry.conf := Mux(io.update.bits.misPred, 0.U, entry.conf)
+        // wEntry.tripCnt := Fill(cntBits, 1.U(1.W))
+        wEntry.tripCnt := Mux(io.update.bits.misPred, Fill(cntBits, 1.U(1.W)), entry.tripCnt)
       // A not-taken loop-branch found in the LTB during branch resolution updates its trip count and conf.
       }.otherwise {
         // wEntry.conf := Mux(entry.nSpecCnt === entry.tripCnt, Mux(entry.isLearned, 7.U, entry.conf + 1.U), 0.U)
-        wEntry.conf := Mux(io.update.bits.misPred, 0.U, Mux(entry.isLearned, 7.U, entry.conf + 1.U))
+        // wEntry.conf := Mux(io.update.bits.misPred, 0.U, Mux(entry.isLearned, 7.U, entry.conf + 1.U))
+        wEntry.conf := Mux((entry.nSpecCnt + 1.U) === entry.tripCnt, Mux(entry.isLearned, 7.U, entry.conf + 1.U), 0.U)
         // wEntry.tripCnt := entry.nSpecCnt + 1.U
         wEntry.tripCnt := io.update.bits.meta
         wEntry.specCnt := Mux(io.update.bits.misPred, 0.U, entry.specCnt/* - entry.nSpecCnt - 1.U*/)
@@ -140,17 +145,6 @@ class LTBColumn extends LTBModule {
       ltb(updateIdx) := wEntry
     }
   }
-
-  // // speculatively update specCnt
-  // when (io.req.valid && if3_entry.tag === if3_tag) {
-  //   when ((if3_entry.specCnt + 1.U) === if3_entry.tripCnt/* && if3_entry.isConf*/) {
-  //     ltb(if3_idx).age := 7.U
-  //     ltb(if3_idx).specCnt := 0.U
-  //   }.otherwise {
-  //     ltb(if3_idx).age := Mux(if3_entry.age === 7.U, 7.U, if3_entry.age + 1.U)
-  //     ltb(if3_idx).specCnt := if3_entry.specCnt + 1.U
-  //   }
-  // }
 
   when (io.if4_fire && if4_entry.tag === if4_tag && io.outMask) {
     when ((if4_entry.specCnt + 1.U) === if4_entry.tripCnt) {
