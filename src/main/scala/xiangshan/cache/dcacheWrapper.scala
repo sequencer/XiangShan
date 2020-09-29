@@ -119,6 +119,7 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   val loadMissQueue = Module(new LoadMissQueue)
   val storeMissQueue = Module(new StoreMissQueue)
   val atomicsMissQueue = Module(new AtomicsMissQueue)
+  val prefetcher = Seq.fill(nClientMissQueues) { Module(new NextLinePrefetcher) }
   val missQueue = Module(new MissQueue(edge))
   val wb = Module(new WritebackUnit(edge))
   val prober = Module(new ProbeUnit(edge))
@@ -310,15 +311,17 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
     "TLB missed requests should not go to cache")
   assert(!io.lsu.atomics.s1_kill, "Lsroq should never use s1 kill on atomics")
 
-
   //----------------------------------------
   // miss queue
   val loadMissQueueClientId  = 0.U(clientIdWidth.W)
   val storeMissQueueClientId = 1.U(clientIdWidth.W)
   val atomicsMissQueueClientId  = 2.U(clientIdWidth.W)
+  val loadPrefetcherClientId = 3.U(clientIdWidth.W)
+  val storePrefetcherClientId = 4.U(clientIdWidth.W)
+  val atomicsPrefetcherClientId = 5.U(clientIdWidth.W)
 
   // Request
-  val missReqArb = Module(new Arbiter(new MissReq, 3))
+  val missReqArb = Module(new Arbiter(new MissReq, nClientMissQueues*2))
 
   val missReq      = missQueue.io.req
   val loadMissReq  = loadMissQueue.io.miss_req
@@ -342,6 +345,14 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   missReqArb.io.in(2).bits           := atomicsMissReq.bits
   missReqArb.io.in(2).bits.client_id := Cat(atomicsMissQueueClientId,
     atomicsMissReq.bits.client_id(entryIdMSB, entryIdLSB))
+
+  for (i <- 0 until nClientMissQueues) {
+    missReqArb.io.in(nClientMissQueues + i).valid := prefetcher(i).io.prefetch_req.valid
+    prefetcher(i).io.prefetch_req.ready := missReqArb.io.in(nClientMissQueues + i).ready
+    missReqArb.io.in(nClientMissQueues + i).bits := prefetcher(i).io.prefetch_req.bits
+    missReqArb.io.in(nClientMissQueues + i).bits.client_id := Cat((nClientMissQueues + i).U(clientIdWidth.W),
+      0.U(clientMissQueueEntryIdWidth.W))
+  }
 
   val miss_block = block_miss(missReqArb.io.out.bits.addr)
   block_decoupled(missReqArb.io.out, missReq, miss_block)
@@ -370,13 +381,19 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   atomicsMissResp.bits.entry_id := missResp.bits.entry_id
   atomicsMissResp.bits.client_id := missResp.bits.client_id(entryIdMSB, entryIdLSB)
 
+  for (i <- 0 until nClientMissQueues) {
+    prefetcher(i).io.prefetch_resp.valid := missResp.valid && clientId === (i + nClientMissQueues).U
+    prefetcher(i).io.prefetch_resp.bits.entry_id := missResp.bits.entry_id
+    prefetcher(i).io.prefetch_resp.bits.client_id := missResp.bits.client_id(entryIdMSB, entryIdLSB)
+  }
+
   // Finish
   val missFinish        = missQueue.io.finish
   val loadMissFinish    = loadMissQueue.io.miss_finish
   val storeMissFinish   = storeMissQueue.io.miss_finish
   val atomicsMissFinish    = atomicsMissQueue.io.miss_finish
 
-  val missFinishArb = Module(new Arbiter(new MissFinish, 3))
+  val missFinishArb = Module(new Arbiter(new MissFinish, nClientMissQueues*2))
   missFinishArb.io.in(0).valid          := loadMissFinish.valid
   loadMissFinish.ready                  := missFinishArb.io.in(0).ready
   missFinishArb.io.in(0).bits.entry_id  := loadMissFinish.bits.entry_id
@@ -395,6 +412,14 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   missFinishArb.io.in(2).bits.client_id := Cat(atomicsMissQueueClientId,
     atomicsMissFinish.bits.client_id(entryIdMSB, entryIdLSB))
 
+  for (i <- 0 until nClientMissQueues) {
+    missFinishArb.io.in(i + nClientMissQueues).valid := prefetcher(i).io.prefetch_finish.valid
+    prefetcher(i).io.prefetch_finish.ready := missFinishArb.io.in(i + nClientMissQueues).ready
+    missFinishArb.io.in(i + nClientMissQueues).bits.entry_id := prefetcher(i).io.prefetch_finish.bits.entry_id
+    missFinishArb.io.in(i + nClientMissQueues).bits.client_id := Cat((i + nClientMissQueues).U(clientIdWidth.W), 
+      prefetcher(i).io.prefetch_finish.bits.client_id(entryIdMSB, entryIdLSB))
+  }
+
   missFinish                            <> missFinishArb.io.out
 
   // tilelink stuff
@@ -410,7 +435,17 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
     // This should be GrantData
     missQueue.io.mem_grant <> bus.d
   }
+  
+  //----------------------------------------
+  // prefetch
+  prefetcher(0).io.req.valid := loadMissReq.valid
+  prefetcher(0).io.req.bits := loadMissReq.bits
 
+  prefetcher(1).io.req.valid := storeMissReq.valid
+  prefetcher(1).io.req.bits := storeMissReq.bits
+
+  prefetcher(2).io.req.valid := atomicsMissReq.valid
+  prefetcher(2).io.req.bits := atomicsMissReq.bits
 
   //----------------------------------------
   // prober

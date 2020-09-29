@@ -85,7 +85,7 @@ trait HasDCacheParameters extends HasL1CacheParameters {
       miscMissQueueEntryIdWidth)
 
   def nClientMissQueues = 3
-  def clientIdWidth = log2Up(nClientMissQueues)
+  def clientIdWidth = log2Up(nClientMissQueues*2)
   def missQueueClientIdWidth = clientIdWidth + clientMissQueueEntryIdWidth
   def clientIdMSB = missQueueClientIdWidth - 1
   def clientIdLSB = clientMissQueueEntryIdWidth
