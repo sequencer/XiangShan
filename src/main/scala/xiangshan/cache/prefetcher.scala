@@ -24,7 +24,8 @@ class NextLinePrefetcher extends Prefetcher {
   val resp = Reg(new MissResp)
 
   io.prefetch_req.valid := state === s_req
-  io.prefetch_req.bits.cmd := Mux(isRead(req.cmd), M_PFR, M_PFW)
+  // io.prefetch_req.bits.cmd := Mux(isRead(req.cmd), M_PFR, M_PFW)
+  io.prefetch_req.bits.cmd := req.cmd
   io.prefetch_req.bits.addr := req.addr + (CacheLineSize / 8).U
   // io.prefetch_req.bits.client_id := Cat(3.U(clientIdWidth.W), 0.U(clientMissQueueEntryIdWidth.W))
   io.prefetch_req.bits.client_id := DontCare

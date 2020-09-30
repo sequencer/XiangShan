@@ -364,7 +364,7 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
 
   for (i <- 0 until nClientMissQueues) {
     prefetcher(i).io.prefetch_resp.valid := missResp.valid && clientId === (i + nClientMissQueues).U
-    prefetcher(i).io.prefetch_resp.bits.entry_id := missResp.bits.entry_id
+    prefetcher(i).io.prefetch_resp.bits := missResp.bits
     prefetcher(i).io.prefetch_resp.bits.client_id := missResp.bits.client_id(entryIdMSB, entryIdLSB)
   }
 
