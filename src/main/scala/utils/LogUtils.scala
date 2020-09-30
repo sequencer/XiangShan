@@ -11,6 +11,7 @@ object XSLogLevel extends Enumeration {
   val ALL   = Value(0, "ALL  ")
   val DEBUG = Value("DEBUG")
   val INFO  = Value("INFO ")
+  val PERF  = Value("PERF ")
   val WARN  = Value("WARN ")
   val ERROR = Value("ERROR")
   val OFF   = Value("OFF  ")
@@ -26,7 +27,9 @@ object XSLog {
     val logTimestamp = WireInit(0.U(64.W))
     ExcitingUtils.addSink(logEnable, "DISPLAY_LOG_ENABLE")
     ExcitingUtils.addSink(logTimestamp, "logTimestamp")
-    if(Parameters.get.envParameters.EnableDebug){
+    val enableDebug = Parameters.get.envParameters.EnableDebug && debugLevel != XSLogLevel.PERF
+    val enablePerf = Parameters.get.envParameters.EnablePerfDebug && debugLevel == XSLogLevel.PERF
+    if (enableDebug || enablePerf) {
       when (cond && logEnable) {
         val commonInfo = p"[$debugLevel][time=$logTimestamp] $MagicStr: "
         printf((if (prefix) commonInfo else p"") + pable)
@@ -98,3 +101,9 @@ object XSInfo extends LogHelper(XSLogLevel.INFO)
 object XSWarn extends LogHelper(XSLogLevel.WARN)
 
 object XSError extends LogHelper(XSLogLevel.ERROR)
+
+object XSPerf {
+  def apply(perfName: String, perfCnt: UInt)(implicit name: String) = {
+    XSLog(XSLogLevel.PERF)(true, true.B, p"$perfName, $perfCnt\n")
+  }
+}

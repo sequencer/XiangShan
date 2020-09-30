@@ -5,6 +5,7 @@ import chisel3.util._
 import utils._
 import xiangshan._
 import xiangshan.cache._
+import chisel3.ExcitingUtils._
 import xiangshan.cache.{DCacheWordIO, DCacheLineIO, TlbRequestIO, MemoryOpConstants}
 import xiangshan.backend.LSUOpType
 
@@ -328,6 +329,7 @@ class Lsroq extends XSModule with HasDCacheParameters {
         data(loadWbSel(i)).mmio
       )
     }
+    ExcitingUtils.addSource(io.ldout(i).fire(), "perfCntCacheLoadMiss"+i, Perf)
   })
 
   // writeback up to 2 store insts to CDB
@@ -734,4 +736,8 @@ class Lsroq extends XSModule with HasDCacheParameters {
     if (i % 4 == 3) XSDebug(false, true.B, "\n")
   }
 
+  XSPerf("utilization", PopCount(allocated))
+  XSPerf("storeWait", PopCount((0 until LsroqSize).map(i => allocated(i) && store(i) && commited(i))))
+  XSPerf("enqInstr", PopCount(io.dp1Req.map(_.fire())))
+  XSPerf("replayInstr", Mux(io.brqRedirect.valid && io.brqRedirect.bits.isReplay, PopCount(needCancel), 0.U))
 }

@@ -132,4 +132,6 @@ class Ibuffer extends XSModule {
         ibuf(i*8+7).inst, ibuf_valid(i*8+7)
     )
   }
+
+  XSPerf("utilization", PopCount(ibuf_valid))
 }
