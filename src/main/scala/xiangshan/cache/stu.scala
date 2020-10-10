@@ -20,21 +20,17 @@ class StorePipe extends DCacheModule
 
 
   // LSU requests
-  io.lsu.req.ready := io.meta_read.ready && io.data_read.ready
-  io.meta_read.valid := io.lsu.req.valid
-  io.data_read.valid := io.lsu.req.valid
+  val s1_wait_data_read = Wire(Bool())
+  val continue_waiting = Wire(Bool())
+  io.lsu.req.ready := io.meta_read.ready && !s1_wait_data_read
+  io.meta_read.valid := io.lsu.req.valid && !s1_wait_data_read
 
   val meta_read = io.meta_read.bits
-  val data_read = io.data_read.bits
 
   // Tag read for new requests
   meta_read.idx    := get_idx(io.lsu.req.bits.addr)
   meta_read.way_en := ~0.U(nWays.W)
   meta_read.tag    := DontCare
-  // Data read for new requests
-  data_read.addr   := io.lsu.req.bits.addr
-  data_read.way_en := ~0.U(nWays.W)
-  data_read.rmask  := ~0.U(blockRows.W)
 
   // Pipeline
   // stage 0
@@ -46,32 +42,28 @@ class StorePipe extends DCacheModule
   dump_pipeline_reqs("StorePipe s0", s0_valid, s0_req)
 
   // stage 1
-  val s1_req = RegNext(s0_req)
-  val s1_valid = RegNext(s0_valid, init = false.B)
+  val s1_req = Reg(new DCacheLineReq)
+  val s1_valid = RegInit(init = false.B)
+  when (!s1_wait_data_read) {
+    s1_valid := s0_valid
+    s1_req := s0_req
+  }
   val s1_addr = s1_req.addr
-  val s1_nack = false.B 
 
   dump_pipeline_reqs("StorePipe s1", s1_valid, s1_req)
 
-  val meta_resp = io.meta_resp
+  val meta_resp_reg = Reg(Vec(nWays, new L1Metadata))
+  val meta_resp = Mux(continue_waiting, meta_resp_reg, io.meta_resp)
+  meta_resp_reg := meta_resp
+
   // tag check
   def wayMap[T <: Data](f: Int => T) = VecInit((0 until nWays).map(f))
   val s1_tag_eq_way = wayMap((w: Int) => meta_resp(w).tag === (get_tag(s1_addr))).asUInt
   val s1_tag_match_way = wayMap((w: Int) => s1_tag_eq_way(w) && meta_resp(w).coh.isValid()).asUInt
-
-
-  // stage 2
-  val s2_req   = RegNext(s1_req)
-  val s2_valid = RegNext(s1_valid, init = false.B)
-
-  dump_pipeline_reqs("StorePipe s2", s2_valid, s2_req)
-
-  val s2_tag_match_way = RegNext(s1_tag_match_way)
-  val s2_tag_match     = s2_tag_match_way.orR
-  val s2_hit_way       = OHToUInt(s2_tag_match_way, nWays)
-  val s2_hit_state     = Mux1H(s2_tag_match_way, wayMap((w: Int) => RegNext(meta_resp(w).coh)))
-  val s2_has_permission = s2_hit_state.onAccess(s2_req.cmd)._1
-  val s2_new_hit_state  = s2_hit_state.onAccess(s2_req.cmd)._3
+  val s1_tag_match     = s1_tag_match_way.orR
+  val s1_hit_state     = Mux1H(s1_tag_match_way, wayMap((w: Int) => meta_resp(w).coh))
+  val s1_has_permission = s1_hit_state.onAccess(s1_req.cmd)._1
+  val s1_new_hit_state  = s1_hit_state.onAccess(s1_req.cmd)._3
 
   // we not only need permissions
   // we also require that state does not change on hit
@@ -82,19 +74,36 @@ class StorePipe extends DCacheModule
   // since we can not write meta data on the main pipeline.
   // It's possible that we had permission but state changes on hit:
   // eg: write to exclusive but clean block
-  val s2_hit = s2_tag_match && s2_has_permission && s2_hit_state === s2_new_hit_state
-  val s2_nack = Wire(Bool())
+  val s1_hit = s1_tag_match && s1_has_permission && s1_hit_state === s1_new_hit_state
 
-  val s2_nack_hit    = RegNext(s1_nack)
-  val s2_nack_set_busy  = s2_valid && false.B
+  val data_read = io.data_read.bits
+  io.data_read.valid := s1_valid && s1_hit
+  // Data read for new requests
+  data_read.addr   := s1_req.addr
+  data_read.way_en := s1_tag_match_way
+  // only needs to read the specific row
+  data_read.rmask  := UIntToOH(get_row(s1_req.addr))
 
-  s2_nack           := s2_nack_hit || s2_nack_set_busy
+  s1_wait_data_read := io.data_read.valid && !io.data_read.ready
+  continue_waiting := RegNext(s1_wait_data_read, init = false.B)
 
-  val s2_info = p"tag match: $s2_tag_match hasPerm: $s2_has_permission" +
-    p" hit state: $s2_hit_state new state: $s2_new_hit_state s2_nack: $s2_nack\n"
+  val s1_info = p"tag match: $s1_tag_match hasPerm: $s1_has_permission" +
+    p" hit state: $s1_hit_state new state: $s1_new_hit_state\n"
+  // only dump these signals when they are actually valid
+  dump_pipeline_valids("StorePipe s1", "s1_hit", s1_valid && s1_hit)
+
+  // stage 2
+  val s2_req   = RegNext(s1_req)
+  val s2_valid = RegNext(s1_valid && !s1_wait_data_read, init = false.B)
+
+  dump_pipeline_reqs("StorePipe s2", s2_valid, s2_req)
+
+  val s2_tag_match_way = RegNext(s1_tag_match_way)
+  val s2_hit = RegNext(s1_hit)
+  val s2_nack = false.B
 
   val data_resp = io.data_resp
-  val s2_data = data_resp(s2_hit_way)
+  val s2_data = Mux1H(s2_tag_match_way, data_resp)
   val s2_data_decoded = (0 until blockRows) map { r =>
     (0 until rowWords) map { w =>
       val data = s2_data(r)(encWordBits * (w + 1) - 1, encWordBits * w)
@@ -134,12 +143,6 @@ class StorePipe extends DCacheModule
   data_write.data     := wdata_merged
 
   assert(!(io.data_write.valid && !io.data_write.ready))
-
-  // only dump these signals when they are actually valid
-  dump_pipeline_valids("StorePipe s2", "s2_hit", s2_valid && s2_hit)
-  dump_pipeline_valids("StorePipe s2", "s2_nack", s2_valid && s2_nack)
-  dump_pipeline_valids("StorePipe s2", "s2_nack_hit", s2_valid && s2_nack_hit)
-  dump_pipeline_valids("StorePipe s2", "s2_nack_set_busy", s2_valid && s2_nack_set_busy)
 
   val resp = Wire(Valid(new DCacheResp))
   resp.valid     := s2_valid
@@ -186,7 +189,7 @@ class StorePipe extends DCacheModule
 
   def dump_pipeline_valids(pipeline_stage_name: String, signal_name: String, valid: Bool) = {
     when (valid) {
-      XSDebug(p"$pipeline_stage_name $signal_name " + s2_info)
+      XSDebug(p"$pipeline_stage_name $signal_name " + s1_info)
     }
   }
 }

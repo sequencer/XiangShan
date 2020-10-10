@@ -63,9 +63,6 @@ class WritebackUnit(edge: TLEdgeOut) extends DCacheModule {
     }
   }
 
-  val dataArrayLatency = 2
-  val data_array_ctr  = Reg(UInt(log2Up(dataArrayLatency).W))
-
   when (state === s_data_read_req) {
     // Data read for new requests
     io.data_req.valid       := true.B
@@ -75,32 +72,28 @@ class WritebackUnit(edge: TLEdgeOut) extends DCacheModule {
 
     when (io.data_req.fire()) {
       state := s_data_read_resp
-      data_array_ctr := 0.U
     }
   }
 
   when (state === s_data_read_resp) {
-    data_array_ctr := data_array_ctr + 1.U
-    when (data_array_ctr === (dataArrayLatency - 1).U) {
-      val way_idx = OHToUInt(req.way_en)
-      for (i <- 0 until refillCycles) {
-        wb_buffer(i) := Cat((0 until beatRows).reverse map { j =>
-          val idx = i * beatRows + j
-          val row = io.data_resp(way_idx)(idx)
-          // encode each word in this row
-          val row_decoded = Cat((0 until rowWords).reverse map { w =>
-            val data_word = row(encWordBits * (w + 1) - 1, encWordBits * w)
-            val decoded = cacheParams.dataCode.decode(data_word)
-            val data_word_decoded = decoded.corrected
-            assert(!decoded.uncorrectable)
-            data_word_decoded
-          })
-        row_decoded
+    val way_idx = OHToUInt(req.way_en)
+    for (i <- 0 until refillCycles) {
+      wb_buffer(i) := Cat((0 until beatRows).reverse map { j =>
+        val idx = i * beatRows + j
+        val row = io.data_resp(way_idx)(idx)
+        // encode each word in this row
+        val row_decoded = Cat((0 until rowWords).reverse map { w =>
+          val data_word = row(encWordBits * (w + 1) - 1, encWordBits * w)
+          val decoded = cacheParams.dataCode.decode(data_word)
+          val data_word_decoded = decoded.corrected
+          assert(!decoded.uncorrectable)
+          data_word_decoded
         })
-      }
-
-      state := s_active
+      row_decoded
+      })
     }
+
+    state := s_active
   }
 
   // release

@@ -195,8 +195,8 @@ class DuplicatedDataArray extends AbstractDataArray
           array.write(waddr, data, io.write.bits.wmask(r).asBools)
         }
         // data read
-        io.resp(j)(w)(r) := RegNext(array.read(raddr, io.read(j).bits.way_en(w)
-          && io.read(j).bits.rmask(r) && io.read(j).valid).asUInt)
+        io.resp(j)(w)(r) := array.read(raddr, io.read(j).bits.way_en(w)
+          && io.read(j).bits.rmask(r) && io.read(j).valid).asUInt
       }
     }
     io.nacks(j) := false.B

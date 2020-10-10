@@ -23,26 +23,19 @@ class LoadPipe extends DCacheModule
   assert(!(io.lsu.req.valid && io.lsu.req.bits.meta.replay && io.nack))
 
   // it you got nacked, you can directly passdown
-  val not_nacked_ready = io.meta_read.ready && io.data_read.ready
+  val not_nacked_ready = io.meta_read.ready
   val nacked_ready     = true.B
 
   // ready can wait for valid
   io.lsu.req.ready := io.lsu.req.valid && ((!io.nack && not_nacked_ready) || (io.nack && nacked_ready))
   io.meta_read.valid := io.lsu.req.valid && !io.nack
-  io.data_read.valid := io.lsu.req.valid && !io.nack
 
   val meta_read = io.meta_read.bits
-  val data_read = io.data_read.bits
 
   // Tag read for new requests
   meta_read.idx    := get_idx(io.lsu.req.bits.addr)
   meta_read.way_en := ~0.U(nWays.W)
   meta_read.tag    := DontCare
-  // Data read for new requests
-  data_read.addr   := io.lsu.req.bits.addr
-  data_read.way_en := ~0.U(nWays.W)
-  // only needs to read the specific row
-  data_read.rmask  := UIntToOH(get_row(io.lsu.req.bits.addr))
 
   // Pipeline
   // stage 0
@@ -67,20 +60,10 @@ class LoadPipe extends DCacheModule
   val s1_tag_eq_way = wayMap((w: Int) => meta_resp(w).tag === (get_tag(s1_addr))).asUInt
   val s1_tag_match_way = wayMap((w: Int) => s1_tag_eq_way(w) && meta_resp(w).coh.isValid()).asUInt
 
-  assert(!(s1_valid && s1_req.meta.replay && io.lsu.s1_kill),
-    "lsroq tried to kill an replayed request!")
-
-  // stage 2
-  val s2_req   = RegNext(s1_req)
-  val s2_valid = RegNext(s1_valid && !io.lsu.s1_kill, init = false.B)
-
-  dump_pipeline_reqs("LoadPipe s2", s2_valid, s2_req)
-
-  val s2_tag_match_way = RegNext(s1_tag_match_way)
-  val s2_tag_match     = s2_tag_match_way.orR
-  val s2_hit_state     = Mux1H(s2_tag_match_way, wayMap((w: Int) => RegNext(meta_resp(w).coh)))
-  val s2_has_permission = s2_hit_state.onAccess(s2_req.cmd)._1
-  val s2_new_hit_state  = s2_hit_state.onAccess(s2_req.cmd)._3
+  val s1_tag_match     = s1_tag_match_way.orR
+  val s1_hit_state     = Mux1H(s1_tag_match_way, wayMap((w: Int) => meta_resp(w).coh))
+  val s1_has_permission = s1_hit_state.onAccess(s1_req.cmd)._1
+  val s1_new_hit_state  = s1_hit_state.onAccess(s1_req.cmd)._3
 
   // we not only need permissions
   // we also require that state does not change on hit
@@ -91,8 +74,27 @@ class LoadPipe extends DCacheModule
   // since we can not write meta data on the main pipeline.
   // It's possible that we had permission but state changes on hit:
   // eg: write to exclusive but clean block
-  val s2_hit = s2_tag_match && s2_has_permission && s2_hit_state === s2_new_hit_state
-  val s2_nack = Wire(Bool())
+  val s1_hit = s1_tag_match && s1_has_permission && s1_hit_state === s1_new_hit_state
+
+  val data_read = io.data_read.bits
+  io.data_read.valid := s1_valid && !io.lsu.s1_kill && s1_hit && !s1_nack
+  // Data read for new requests
+  data_read.addr   := s1_req.addr
+  data_read.way_en := s1_tag_match_way
+  // only needs to read the specific row
+  data_read.rmask  := UIntToOH(get_row(s1_req.addr))
+
+  assert(!(s1_valid && s1_req.meta.replay && io.lsu.s1_kill),
+    "lsroq tried to kill an replayed request!")
+
+  // stage 2
+  val s2_req   = RegNext(s1_req)
+  val s2_valid = RegNext(s1_valid && !io.lsu.s1_kill, init = false.B)
+  val s2_tag_match_way = RegNext(s1_tag_match_way)
+  val s2_hit = RegNext(s1_hit)
+
+  dump_pipeline_reqs("LoadPipe s2", s2_valid, s2_req)
+
   val s2_data = Wire(Vec(nWays, UInt(encRowBits.W)))
   val data_resp = io.data_resp
   for (w <- 0 until nWays) {
@@ -103,20 +105,17 @@ class LoadPipe extends DCacheModule
   // the index of word in a row, in case rowBits != wordBits
   val s2_word_idx   = if (rowWords == 1) 0.U else s2_req.addr(log2Up(rowWords*wordBytes)-1, log2Up(wordBytes))
 
-  val s2_nack_hit    = RegNext(s1_nack)
-  // Can't allocate MSHR for same set currently being written back
-  // the same set is busy
-  val s2_nack_set_busy  = s2_valid && false.B
-  // Bank conflict on data arrays
-  val s2_nack_data   = false.B
-
-  s2_nack           := s2_nack_hit || s2_nack_set_busy || s2_nack_data
+  // others are manipulating this data block
+  val s2_nack_busy = RegNext(s1_nack)
+  // data array is busy
+  val s2_nack_data = RegNext(io.data_read.valid && !io.data_read.ready)
+  val s2_nack      = s2_nack_busy || s2_nack_data
 
   // only dump these signals when they are actually valid
   dump_pipeline_valids("LoadPipe s2", "s2_hit", s2_valid && s2_hit)
   dump_pipeline_valids("LoadPipe s2", "s2_nack", s2_valid && s2_nack)
-  dump_pipeline_valids("LoadPipe s2", "s2_nack_hit", s2_valid && s2_nack_hit)
-  dump_pipeline_valids("LoadPipe s2", "s2_nack_set_busy", s2_valid && s2_nack_set_busy)
+  dump_pipeline_valids("LoadPipe s2", "s2_nack_busy", s2_valid && s2_nack_busy)
+  dump_pipeline_valids("LoadPipe s2", "s2_nack_data", s2_valid && s2_nack_data)
 
   // load data gen
   val s2_data_words = Wire(Vec(rowWords, UInt(encWordBits.W)))

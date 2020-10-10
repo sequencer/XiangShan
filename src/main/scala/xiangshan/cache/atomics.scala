@@ -24,22 +24,17 @@ class AtomicsPipe extends DCacheModule
   })
 
   // LSU requests
-  io.lsu.req.ready := io.meta_read.ready && io.data_read.ready
-  io.meta_read.valid := io.lsu.req.valid
-  io.data_read.valid := io.lsu.req.valid
+  val s1_wait_data_read = Wire(Bool())
+  val continue_waiting = Wire(Bool())
+  io.lsu.req.ready := io.meta_read.ready && !s1_wait_data_read
+  io.meta_read.valid := io.lsu.req.valid && !s1_wait_data_read
 
   val meta_read = io.meta_read.bits
-  val data_read = io.data_read.bits
 
   // Tag read for new requests
   meta_read.idx    := get_idx(io.lsu.req.bits.addr)
   meta_read.way_en := ~0.U(nWays.W)
   meta_read.tag    := DontCare
-  // Data read for new requests
-  data_read.addr   := io.lsu.req.bits.addr
-  data_read.way_en := ~0.U(nWays.W)
-  // only needs to read the specific beat
-  data_read.rmask  := UIntToOH(get_row(io.lsu.req.bits.addr))
 
   // Pipeline
   // ---------------------------------------
@@ -52,32 +47,28 @@ class AtomicsPipe extends DCacheModule
 
   // ---------------------------------------
   // stage 1
-  val s1_req = RegNext(s0_req)
-  val s1_valid = RegNext(s0_valid, init = false.B)
+  val s1_req = Reg(new DCacheWordReq)
+  val s1_valid = RegInit(init = false.B)
+  when (!s1_wait_data_read) {
+    s1_valid := s0_valid
+    s1_req := s0_req
+  }
   val s1_addr = s1_req.addr
-  val s1_nack = false.B 
 
   dump_pipeline_reqs("AtomicsPipe s1", s1_valid, s1_req)
 
+  val meta_resp_reg = Reg(Vec(nWays, new L1Metadata))
+  val meta_resp = Mux(continue_waiting, meta_resp_reg, io.meta_resp)
+  meta_resp_reg := meta_resp
+
   // tag check
-  val meta_resp = io.meta_resp
   def wayMap[T <: Data](f: Int => T) = VecInit((0 until nWays).map(f))
   val s1_tag_eq_way = wayMap((w: Int) => meta_resp(w).tag === (get_tag(s1_addr))).asUInt
   val s1_tag_match_way = wayMap((w: Int) => s1_tag_eq_way(w) && meta_resp(w).coh.isValid()).asUInt
-
-
-  // ---------------------------------------
-  // stage 2
-  val s2_req   = RegNext(s1_req)
-  val s2_valid = RegNext(s1_valid && !io.lsu.s1_kill, init = false.B)
-
-  dump_pipeline_reqs("AtomicsPipe s2", s2_valid, s2_req)
-
-  val s2_tag_match_way = RegNext(s1_tag_match_way)
-  val s2_tag_match     = s2_tag_match_way.orR
-  val s2_hit_state     = Mux1H(s2_tag_match_way, wayMap((w: Int) => RegNext(meta_resp(w).coh)))
-  val s2_has_permission = s2_hit_state.onAccess(s2_req.cmd)._1
-  val s2_new_hit_state  = s2_hit_state.onAccess(s2_req.cmd)._3
+  val s1_tag_match     = s1_tag_match_way.orR
+  val s1_hit_state     = Mux1H(s1_tag_match_way, wayMap((w: Int) => meta_resp(w).coh))
+  val s1_has_permission = s1_hit_state.onAccess(s1_req.cmd)._1
+  val s1_new_hit_state  = s1_hit_state.onAccess(s1_req.cmd)._3
 
   // we not only need permissions
   // we also require that state does not change on hit
@@ -88,8 +79,31 @@ class AtomicsPipe extends DCacheModule
   // since we can not write meta data on the main pipeline.
   // It's possible that we had permission but state changes on hit:
   // eg: write to exclusive but clean block
-  val s2_hit = s2_tag_match && s2_has_permission && s2_hit_state === s2_new_hit_state
-  val s2_nack = Wire(Bool())
+  val s1_hit = s1_tag_match && s1_has_permission && s1_hit_state === s1_new_hit_state
+
+  // we have permission on this block
+  // but we can not finish in this pass
+  // we need to go to miss queue to update meta and set dirty first
+  val s1_set_dirty = s1_tag_match && s1_has_permission && s1_hit_state =/= s1_new_hit_state
+
+  val data_read = io.data_read.bits
+  io.data_read.valid := s1_valid && s1_hit
+  // Data read for new requests
+  data_read.addr   := s1_req.addr
+  data_read.way_en := s1_tag_match_way
+  // only needs to read the specific row
+  data_read.rmask  := UIntToOH(get_row(s1_req.addr))
+
+  s1_wait_data_read := io.data_read.valid && !io.data_read.ready
+  continue_waiting := RegNext(s1_wait_data_read, init = false.B)
+
+  // stage 2
+  val s2_req   = RegNext(s1_req)
+  val s2_valid = RegNext(s1_valid && !s1_wait_data_read, init = false.B)
+  val s2_tag_match_way = RegNext(s1_tag_match_way)
+  val s2_hit = RegNext(s1_hit)
+  val s2_set_dirty = RegNext(s1_set_dirty)
+
   val s2_data = Wire(Vec(nWays, UInt(encRowBits.W)))
   val data_resp = io.data_resp
   for (w <- 0 until nWays) {
@@ -99,15 +113,7 @@ class AtomicsPipe extends DCacheModule
   val s2_data_muxed = Mux1H(s2_tag_match_way, s2_data)
   // the index of word in a row, in case rowBits != wordBits
   val s2_word_idx   = if (rowWords == 1) 0.U else s2_req.addr(log2Up(rowWords*wordBytes)-1, log2Up(wordBytes))
-
-  val s2_nack_hit    = RegNext(s1_nack)
-  // Can't allocate MSHR for same set currently being written back
-  // the same set is busy
-  val s2_nack_set_busy  = s2_valid && false.B
-  // Bank conflict on data arrays
-  val s2_nack_data   = false.B
-
-  s2_nack           := s2_nack_hit || s2_nack_set_busy || s2_nack_data
+  val s2_nack = false.B
 
   // lr/sc
   val debug_sc_fail_addr = RegInit(0.U)
@@ -124,10 +130,6 @@ class AtomicsPipe extends DCacheModule
 
   // BoringUtils.addSource(RegEnable(lrsc_addr, s2_valid && s2_lr), "difftestLrscAddr")
 
-  // we have permission on this block
-  // but we can not finish in this pass
-  // we need to go to miss queue to update meta and set dirty first
-  val s2_set_dirty = s2_tag_match && s2_has_permission && s2_hit_state =/= s2_new_hit_state
   // this sc should succeed, but we need to set dirty first
   // do not treat it as a sc failure and reset lr sc counter
   val sc_set_dirty = s2_set_dirty && !s2_nack && s2_sc && s2_lrsc_addr_match
@@ -176,8 +178,6 @@ class AtomicsPipe extends DCacheModule
   // only dump these signals when they are actually valid
   dump_pipeline_valids("AtomicsPipe s2", "s2_hit", s2_valid && s2_hit)
   dump_pipeline_valids("AtomicsPipe s2", "s2_nack", s2_valid && s2_nack)
-  dump_pipeline_valids("AtomicsPipe s2", "s2_nack_hit", s2_valid && s2_nack_hit)
-  dump_pipeline_valids("AtomicsPipe s2", "s2_nack_set_busy", s2_valid && s2_nack_set_busy)
   when (s2_valid) {
     XSDebug("lrsc_count: %d lrsc_valid: %b lrsc_addr: %x\n",
       lrsc_count, lrsc_valid, lrsc_addr)
