@@ -329,7 +329,8 @@ class Lsroq extends XSModule with HasDCacheParameters {
         data(loadWbSel(i)).mmio
       )
     }
-    ExcitingUtils.addSource(io.ldout(i).fire(), "perfCntCacheLoadMiss"+i, Perf)
+    ExcitingUtils.addSource(io.ldout(i).fire(), "perfCntDCacheLoadMiss"+i, Perf)
+    ExcitingUtils.addSource(io.stout(i).fire(), "perfCntDCacheStoreMiss"+i, Perf)
   })
 
   // writeback up to 2 store insts to CDB
