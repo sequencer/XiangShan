@@ -74,14 +74,24 @@ class NextLinePrefetcher extends PrefetcherModule {
 class StreamBufferEntry extends PrefetcherBundle {
   val req = new MissReq
   val resp = new MissResp
+  
+  override def toPrintable: Printable = {
+    p"0x${Hexadecimal(req.addr)}"
+  }
 }
 
 class StreamBufferUpdateBundle extends MissReq {
   // nothing here
+  override def toPrintable: Printable = {
+    p"cmd=${Hexadecimal(cmd)} addr=0x${Hexadecimal(addr)} client_id=${client_id}"
+  }
 }
 
 class StreamBufferAllocBundle extends MissReq {
   // nothing here
+  override def toPrintable: Printable = {
+    p"cmd=${Hexadecimal(cmd)} addr=0x${Hexadecimal(addr)} client_id=${client_id}"
+  }
 }
 
 object ParallelMin {
@@ -159,7 +169,7 @@ class StreamBuffer extends PrefetcherModule {
 
   // initialize: empty buffer when state === s_idle
   val needRealloc = RegInit(false.B)
-  val reallocReq = RegInit(0.U.asTypeOf(new MissReq))
+  val reallocReq = RegInit(0.U.asTypeOf(new StreamBufferAllocBundle))
   when ((io.alloc.valid || needRealloc) && state === s_idle) {
     valid.foreach(_ := false.B)
     head := 0.U
@@ -181,9 +191,31 @@ class StreamBuffer extends PrefetcherModule {
   io.prefetchFinish.bits.client_id := buf(tail).resp.client_id
   io.prefetchFinish.bits.entry_id := buf(tail).resp.entry_id
 
+
+  // debug
+  XSDebug(io.addr.valid, "entryId=%d io.addr=0x%x\n", io.entryId, io.addr.bits)
+  XSDebug(io.update.valid, p"update: ${io.update.bits}\n")
+  XSDebug(io.alloc.valid, p"alloc: ${io.alloc.bits}\n")
+  XSDebug("prefetchReq(%d %d) cmd=%x addr=0x%x client_id=%b\n",
+    io.prefetchReq.valid, io.prefetchReq.ready, io.prefetchReq.bits.cmd, io.prefetchReq.bits.addr, io.prefetchReq.bits.client_id)
+  XSDebug("prefetchResp(%d %d) client_id=%b entry_id=%b way_en=%b has_data=%d\n",
+    io.prefetchResp.valid, io.prefetchResp.ready, io.prefetchResp.bits.client_id, io.prefetchResp.bits.entry_id, io.prefetchResp.bits.way_en, io.prefetchResp.bits.has_data)
+  XSDebug("prefetchFinish(%d %d) client_id=%b entry_id=%b\n",
+    io.prefetchFinish.valid, io.prefetchFinish.ready, io.prefetchFinish.bits.client_id, io.prefetchFinish.bits.entry_id)
+
+  XSDebug("buf:\n")
+  for (i <- 0 until streamSize) {
+    if (i % 4 == 0) { XSDebug("") }
+    XSDebug(false, true.B, p"${Hexadecimal(i.U)} v ${valid(i)} ${buf(i)}  ")
+    if (i % 4 == 3) { XSDebug(false, true.B, "\n") }
+  }
+  XSDebug("state=%d head=%d tail=%d full=%d empty=%d\n", state, head, tail, full, empty)
+  XSDebug(baseReq.valid, "baseReq: cmd=%x addr=0x%x client_id=%b\n", baseReq.bits.cmd, baseReq.bits.addr, baseReq.bits.client_id)
+  XSDebug(needRealloc, p"reallocReq: ${reallocReq}\n")
+  
 }
 
-class StreamBufferPrefetcher extends PrefetcherModule {
+class StreamPrefetcher extends PrefetcherModule {
   val io = IO(new PrefetcherIO)
 
   val streamBufs = Seq.fill(streamCnt) { Module(new StreamBuffer) }
@@ -197,7 +229,7 @@ class StreamBufferPrefetcher extends PrefetcherModule {
     val addr = UInt(PAddrBits.W)
 
     override def toPrintable: Printable = {
-      p"conf:${conf} addr:0x${Hexadecimal(addr)}"
+      p"${conf} 0x${Hexadecimal(addr)}"
     }
   }
   val beforeEnterBuf = RegInit(VecInit(Seq.fill(streamCnt * 2)(0.U.asTypeOf(new beforeEnterBufEntry))))
@@ -295,4 +327,28 @@ class StreamBufferPrefetcher extends PrefetcherModule {
   io.prefetch_finish <> finishArb.io.out
   
   // debug
+  XSDebug(io.req.valid, "missReq: cmd=%x addr=0x%x client_id=%b hit=%d\n", io.req.bits.cmd, io.req.bits.addr, io.req.bits.client_id, hit)
+  XSDebug("prefetch_req(%d %d) cmd=%x addr=0x%x client_id=%b\n",
+    io.prefetch_req.valid, io.prefetch_req.ready, io.prefetch_req.bits.cmd, io.prefetch_req.bits.addr, io.prefetch_req.bits.client_id)
+  XSDebug("prefetch_resp(%d %d) client_id=%b entry_id=%b way_en=%b has_data=%d\n",
+    io.prefetch_resp.valid, io.prefetch_resp.ready, io.prefetch_resp.bits.client_id, io.prefetch_resp.bits.entry_id, io.prefetch_resp.bits.way_en, io.prefetch_resp.bits.has_data)
+  XSDebug("prefetch_finish(%d %d) client_id=%b entry_id=%b\n",
+    io.prefetch_finish.valid, io.prefetch_finish.ready, io.prefetch_finish.bits.client_id, io.prefetch_finish.bits.entry_id)
+  
+  XSDebug("")
+  for (i <- 0 until streamCnt) {
+    XSDebug(false, "%d: v=%d age=%d  ", i.U, valids(i), ages(i))
+  }
+  XSDebug(false, "\n")
+
+  XSDebug("beforeEnterBuf:\n")
+  for (i <- 0 until (streamCnt*2)) {
+    if (i % 4 == 0) { XSDebug("") }
+    XSDebug(false, true.B, p"${beforeEnterBuf(i)} ")
+    if (i % 4 == 3) { XSDebug(false, true.B, "\n") }
+  }
+  XSDebug("conf0Vec=%b conf1Vec=%b addrHits=%b\n", conf0Vec.asUInt, conf1Vec.asUInt, addrHits)
+
+  XSDebug(reqLatch.valid, "reqLatch: cmd=%x addr=0x%x client_id=%b allocNewStream=%d\n", reqLatch.bits.cmd, reqLatch.bits.addr, reqLatch.bits.client_id, allocNewStream)
+
 }
