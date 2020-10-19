@@ -94,9 +94,14 @@ class StreamBufferAllocBundle extends MissReq {
   }
 }
 
+class CompareBundle extends PrefetcherBundle {
+  val bits = UInt(ageWidth.W)
+  val idx = UInt()
+}
+
 object ParallelMin {
-  def apply[T <: Data](xs: Seq[T]): T = {
-    ParallelOperation(xs, (a: T, b: T) => Mux(a._1.asUInt < b._1.asUInt, a, b).asTypeOf(xs.head))
+  def apply[T <: Data](xs: Seq[CompareBundle]): CompareBundle = {
+    ParallelOperation(xs, (a: CompareBundle, b: CompareBundle) => Mux(a.bits < b.bits, a, b))
   }
 }
 
@@ -114,7 +119,7 @@ class StreamBuffer extends PrefetcherModule {
 
   val baseReq = RegInit(0.U.asTypeOf(Valid(new MissReq)))
 
-  val buf = RegInit(VecInit(streamSize, 0.U.asTypeOf(new StreamBufferEntry)))
+  val buf = RegInit(VecInit(Seq.fill(streamSize)(0.U.asTypeOf(new StreamBufferEntry))))
   val valid = RegInit(VecInit(Seq.fill(streamSize)(false.B)))
   val head = RegInit(0.U(log2Up(streamSize).W))
   val tail = RegInit(0.U(log2Up(streamSize).W))
@@ -220,7 +225,7 @@ class StreamPrefetcher extends PrefetcherModule {
 
   val streamBufs = Seq.fill(streamCnt) { Module(new StreamBuffer) }
   val valids = VecInit(streamBufs.map(_.io.addr.valid))
-  val ages = RegInit(VecInit(streamCnt, 0.U(ageWidth.W)))
+  val ages = Seq.fill(streamCnt)(RegInit(0.U(ageWidth.W)))
   val maxAge = Fill(ageWidth, 1.U(1.W))
 
   // a buffer to record whether we find a stream of 2 adjacent cache lines
@@ -232,7 +237,7 @@ class StreamPrefetcher extends PrefetcherModule {
       p"${conf} 0x${Hexadecimal(addr)}"
     }
   }
-  val beforeEnterBuf = RegInit(VecInit(Seq.fill(streamCnt * 2)(0.U.asTypeOf(new beforeEnterBufEntry))))
+  val beforeEnterBuf = RegInit(VecInit(Seq.fill(streamCnt * 2)(0.U.asTypeOf(beforeEnterBufEntry))))
 
   // assign default values
   for (i <- 0 until streamCnt) {
@@ -277,7 +282,7 @@ class StreamPrefetcher extends PrefetcherModule {
       (0 until (streamCnt * 2)).foreach(i => beforeEnterBuf(i).conf := ~Fill(2, (conf1Vec(i) && addrHits(i)).asUInt) & beforeEnterBuf(i).conf)
     }.otherwise { // no adjacent line, set up a new entry in beforeEnterBuf
       val idx = Wire(UInt(log2Up(streamCnt*2).W))
-      when (conf0Vec.orR) {
+      when (conf0Vec.asUInt.orR) {
         idx := PriorityMux(conf0Vec.asUInt, VecInit(List.tabulate(streamCnt*2)(_.U)))
       }.otherwise {
         idx := LFSR64()(log2Up(streamCnt*2) - 1, 0)
@@ -294,7 +299,13 @@ class StreamPrefetcher extends PrefetcherModule {
     when ((~valids.asUInt).orR) {
       idx := PriorityMux(~valids.asUInt, VecInit(List.tabulate(streamCnt)(_.U)))
     }.otherwise {
-      idx := ParallelMin(ages.zipWidthIndex)._2.U
+      val ageSeq = Seq.fill(streamCnt)(Wire(new CompareBundle))
+      for (i <- 0 until streamCnt) {
+        ageSeq(i).bits := ages(i)
+        ageSeq(i).idx := i.U
+      }
+      // idx := ParallelMin(ages.zipWithIndex.map{case (a,b) => (a, b.U)})._2
+      idx := ParallelMin(ageSeq).idx
     }
 
     for (i <- 0 until streamCnt) {
@@ -315,7 +326,7 @@ class StreamPrefetcher extends PrefetcherModule {
     streamBufs(i).io.prefetchResp.valid := io.prefetch_resp.valid && io.prefetch_resp.bits.entry_id === i.U
     streamBufs(i).io.prefetchResp.bits := io.prefetch_resp.bits
     // io.prefetch_resp.ready ?????
-    io.prefetch_resp.ready := streamBufs.map(_.io.prefetchResp.ready).orR
+    io.prefetch_resp.ready := Cat(streamBufs.map(_.io.prefetchResp.ready)).orR
 
     finishArb.io.in(i).valid := streamBufs(i).io.prefetchFinish.valid
     finishArb.io.in(i).bits := streamBufs(i).io.prefetchFinish.bits
@@ -337,9 +348,9 @@ class StreamPrefetcher extends PrefetcherModule {
   
   XSDebug("")
   for (i <- 0 until streamCnt) {
-    XSDebug(false, "%d: v=%d age=%d  ", i.U, valids(i), ages(i))
+    XSDebug(false, true.B, "%d: v=%d age=%d  ", i.U, valids(i), ages(i))
   }
-  XSDebug(false, "\n")
+  XSDebug(false, true.B, "\n")
 
   XSDebug("beforeEnterBuf:\n")
   for (i <- 0 until (streamCnt*2)) {
