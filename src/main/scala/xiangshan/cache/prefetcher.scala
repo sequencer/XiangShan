@@ -72,7 +72,8 @@ class NextLinePrefetcher extends PrefetcherModule {
 }
 
 class StreamBufferEntry extends PrefetcherBundle {
-  // TODO
+  val req = new MissReq
+  val resp = new MissResp
 }
 
 class StreamBufferUpdateBundle extends MissReq {
@@ -91,12 +92,95 @@ object ParallelMin {
 
 class StreamBuffer extends PrefetcherModule {
   val io = IO(new Bundle {
+    val entryId = Input(UInt(clientMissQueueEntryIdWidth.W))
     val addr = ValidIO(UInt(PAddrBits.W))
     val update = Flipped(ValidIO(new StreamBufferUpdateBundle))
     val alloc = Flipped(ValidIO(new StreamBufferAllocBundle))
+
+    val prefetchReq = DecoupledIO(new MissReq)
+    val prefetchResp = Flipped(DecoupledIO(new MissResp))
+    val prefetchFinish = DecoupledIO(new MissFinish) 
   })
 
-  
+  val baseReq = RegInit(0.U.asTypeOf(Valid(new MissReq)))
+
+  val buf = RegInit(VecInit(streamSize, 0.U.asTypeOf(new StreamBufferEntry)))
+  val valid = RegInit(VecInit(Seq.fill(streamSize)(false.B)))
+  val head = RegInit(0.U(log2Up(streamSize).W))
+  val tail = RegInit(0.U(log2Up(streamSize).W))
+  val full = head === tail && valid(head)
+  val empty = head === tail && !valid(head)
+
+  val s_idle :: s_req :: s_resp :: s_finish :: Nil = Enum(4)
+  val state = RegInit(s_idle)
+
+  // dequeue
+  when (io.update.valid) {
+    when (!empty && valid(head)) {
+      valid(head) := false.B
+      head := head + 1.U
+    }
+    // does baseReq need to be updated?
+  }
+
+
+  // enqueue: send prefetch request as long as stream buffer is not full
+  val tailReq = Mux(empty, baseReq.bits, buf(tail - 1.U).req)
+  val prefetchReq = WireInit(tailReq)
+  prefetchReq.addr := tailReq.addr + (CacheLineSize / 8).U
+  prefetchReq.client_id := Cat(0.U(clientIdWidth.W), io.entryId)
+
+  when (!full && state === s_idle) {
+    state := s_req
+    buf(tail).req := prefetchReq
+  }
+
+  when (state === s_req) {
+    when (io.prefetchReq.fire()) {
+      state := s_resp
+    }
+  }
+
+  when (state === s_resp) {
+    when (io.prefetchResp.fire()) {
+      state := s_finish
+      buf(tail).resp := io.prefetchResp.bits
+    }
+  }
+
+  when (state === s_finish) {
+    when (io.prefetchFinish.fire()) {
+      state := s_idle
+      valid(tail) := true.B
+      tail := tail + 1.U
+    }
+  }
+
+
+  // initialize: empty buffer when state === s_idle
+  val needRealloc = RegInit(false.B)
+  val reallocReq = RegInit(0.U.asTypeOf(new MissReq))
+  when ((io.alloc.valid || needRealloc) && state === s_idle) {
+    valid.foreach(_ := false.B)
+    head := 0.U
+    tail := 0.U
+    baseReq.valid := true.B
+    baseReq.bits := Mux(io.alloc.valid, io.alloc.bits, reallocReq)
+    needRealloc := false.B
+  }.elsewhen (io.alloc.valid && state =/= s_idle) {
+    needRealloc := true.B
+    reallocReq := io.alloc.bits
+  }
+
+  io.addr.valid := baseReq.valid && !empty && valid(head)
+  io.addr.bits := get_block_addr(buf(head).req.addr)
+  io.prefetchReq.valid := state === s_req
+  io.prefetchReq.bits := prefetchReq
+  io.prefetchResp.ready := state === s_resp
+  io.prefetchFinish.valid := state === s_finish
+  io.prefetchFinish.bits.client_id := buf(tail).resp.client_id
+  io.prefetchFinish.bits.entry_id := buf(tail).resp.entry_id
+
 }
 
 class StreamBufferPrefetcher extends PrefetcherModule {
@@ -120,6 +204,7 @@ class StreamBufferPrefetcher extends PrefetcherModule {
 
   // assign default values
   for (i <- 0 until streamCnt) {
+    streamBufs(i).io.entryId := i.U
     streamBufs(i).io.update.valid := false.B
     streamBufs(i).io.update.bits := DontCare
     streamBufs(i).io.alloc.valid := false.B
@@ -130,7 +215,7 @@ class StreamBufferPrefetcher extends PrefetcherModule {
   val hit = WireInit(false.B)
   for (i <- 0 until streamCnt) {
     when (io.req.valid && valids(i)) {
-      when (streamBufs(i).io.addr.bits === io.req.bits.addr) {
+      when (streamBufs(i).io.addr.bits === get_block_addr(io.req.bits.addr)) {
         hit := true.B
         streamBufs(i).io.update.valid := true.B
         streamBufs(i).io.update.bits := io.req.bits
@@ -187,6 +272,27 @@ class StreamBufferPrefetcher extends PrefetcherModule {
     }
   }
 
+  // 3. send prefetch req from stream buffer
+  val reqArb = Module(new Arbiter(new MissReq, streamCnt))
+  val finishArb = Module(new Arbiter(new MissFinish, streamCnt))
+  for (i <- 0 until streamCnt) {
+    reqArb.io.in(i).valid := streamBufs(i).io.prefetchReq.valid
+    reqArb.io.in(i).bits := streamBufs(i).io.prefetchReq.bits
+    streamBufs(i).io.prefetchReq.ready := reqArb.io.in(i).ready
+
+    streamBufs(i).io.prefetchResp.valid := io.prefetch_resp.valid && io.prefetch_resp.bits.entry_id === i.U
+    streamBufs(i).io.prefetchResp.bits := io.prefetch_resp.bits
+    // io.prefetch_resp.ready ?????
+    io.prefetch_resp.ready := streamBufs.map(_.io.prefetchResp.ready).orR
+
+    finishArb.io.in(i).valid := streamBufs(i).io.prefetchFinish.valid
+    finishArb.io.in(i).bits := streamBufs(i).io.prefetchFinish.bits
+    streamBufs(i).io.prefetchFinish.ready := finishArb.io.in(i).ready
+  }
+
+  io.prefetch_req <> reqArb.io.out
+
+  io.prefetch_finish <> finishArb.io.out
   
   // debug
 }

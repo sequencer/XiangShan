@@ -52,10 +52,12 @@ trait HasDCacheParameters extends HasL1CacheParameters {
   def loadMissQueueEntryIdWidth = log2Up(cfg.nLoadMissEntries)
   def storeMissQueueEntryIdWidth = log2Up(cfg.nStoreMissEntries)
   def miscMissQueueEntryIdWidth = log2Up(cfg.nMiscMissEntries)
-  def clientMissQueueEntryIdWidth = max(
+  def streamBufferEntryIdWidth = log2Up(4) // TODO
+  def clientMissQueueEntryIdWidth = max(max(
     max(loadMissQueueEntryIdWidth,
       storeMissQueueEntryIdWidth),
-      miscMissQueueEntryIdWidth)
+      miscMissQueueEntryIdWidth),
+      streamBufferEntryIdWidth)
 
   def nClientMissQueues = 3
   def clientIdWidth = log2Up(nClientMissQueues*2)
