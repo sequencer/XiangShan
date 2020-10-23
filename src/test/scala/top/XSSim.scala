@@ -7,7 +7,7 @@ import chisel3.util.experimental.BoringUtils
 import chipsalliance.rocketchip.config
 import chisel3.stage.ChiselGeneratorAnnotation
 import device._
-import freechips.rocketchip.amba.axi4.{AXI4Fragmenter, AXI4UserYanker}
+import freechips.rocketchip.amba.axi4.{AXI4Fragmenter, AXI4IdentityNode, AXI4UserYanker}
 import freechips.rocketchip.diplomacy.{AddressSet, BufferParams, LazyModule, LazyModuleImp}
 import freechips.rocketchip.tilelink.{TLBuffer, TLCacheCork, TLFragmenter, TLFuzzer, TLToAXI4, TLXbar}
 import xiangshan._
@@ -66,11 +66,32 @@ class TrapIO extends XSBundle {
 }
 
 
+class SocWrapper()(implicit p: config.Parameters) extends LazyModule {
+  val mem = AXI4IdentityNode()
+  val mmio = AXI4IdentityNode()
+  val soc = LazyModule(new XSSoc())
+
+  mem := AXI4UserYanker() :=
+    TLToAXI4() :=
+    TLBuffer(BufferParams.default) :=
+    DebugIdentityNode() :=
+    soc.mem
+
+  mmio := AXI4UserYanker() :=
+    TLToAXI4() :=
+    soc.extDev
+
+  lazy val module = new LazyModuleImp(this) {
+    soc.module.io.meip := false.B
+  }
+}
+
+
 class XSSimTop()(implicit p: config.Parameters) extends LazyModule {
 
   val memAddressSet = AddressSet(0x0L, 0xffffffffffL)
 
-  val soc = LazyModule(new XSSoc())
+  val socWrapper = LazyModule(new SocWrapper())
   val axiRam = LazyModule(new AXI4RAM(
     memAddressSet,
     memByte = 128 * 1024 * 1024,
@@ -78,17 +99,9 @@ class XSSimTop()(implicit p: config.Parameters) extends LazyModule {
   ))
   val axiMMIO = LazyModule(new SimMMIO())
 
-  axiRam.node :=
-    AXI4UserYanker() :=
-    TLToAXI4() :=
-    TLBuffer(BufferParams.default) :=
-    DebugIdentityNode() :=
-    soc.mem
+  axiRam.node := socWrapper.mem
 
-  axiMMIO.axiBus :=
-    AXI4UserYanker() :=
-    TLToAXI4() :=
-    soc.extDev
+  axiMMIO.axiBus := socWrapper.mmio
 
   lazy val module = new LazyModuleImp(this) {
     val io = IO(new Bundle {
@@ -99,7 +112,6 @@ class XSSimTop()(implicit p: config.Parameters) extends LazyModule {
     })
 
     io.uart <> axiMMIO.module.io.uart
-    soc.module.io.meip := false.B
 
     val difftest = WireInit(0.U.asTypeOf(new DiffTestIO))
     BoringUtils.addSink(difftest.commit, "difftestCommit")
