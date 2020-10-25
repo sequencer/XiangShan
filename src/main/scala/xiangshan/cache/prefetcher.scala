@@ -145,7 +145,7 @@ class StreamBuffer extends PrefetcherModule {
   prefetchReq.addr := tailReq.addr + (CacheLineSize / 8).U
   prefetchReq.client_id := Cat(0.U(clientIdWidth.W), io.entryId)
 
-  when (!full && state === s_idle) {
+  when (!full && state === s_idle && baseReq.valid) {
     state := s_req
     buf(tail).req := prefetchReq
   }
