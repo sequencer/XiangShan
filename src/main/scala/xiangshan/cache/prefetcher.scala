@@ -323,7 +323,7 @@ class StreamPrefetcher extends PrefetcherModule {
     reqArb.io.in(i).bits := streamBufs(i).io.prefetchReq.bits
     streamBufs(i).io.prefetchReq.ready := reqArb.io.in(i).ready
 
-    streamBufs(i).io.prefetchResp.valid := io.prefetch_resp.valid && io.prefetch_resp.bits.entry_id === i.U
+    streamBufs(i).io.prefetchResp.valid := io.prefetch_resp.valid && io.prefetch_resp.bits.client_id(entryIdMSB, entryIdLSB) === i.U
     streamBufs(i).io.prefetchResp.bits := io.prefetch_resp.bits
     // io.prefetch_resp.ready ?????
     io.prefetch_resp.ready := Cat(streamBufs.map(_.io.prefetchResp.ready)).orR
@@ -338,6 +338,7 @@ class StreamPrefetcher extends PrefetcherModule {
   io.prefetch_finish <> finishArb.io.out
   
   // debug
+  XSDebug("clientIdWidth=%d clientMissQueueEntryIdWidth=%d\n", clientIdWidth.U, clientMissQueueEntryIdWidth.U)
   XSDebug(io.req.valid, "missReq: cmd=%x addr=0x%x client_id=%b hit=%d\n", io.req.bits.cmd, io.req.bits.addr, io.req.bits.client_id, hit)
   XSDebug("prefetch_req(%d %d) cmd=%x addr=0x%x client_id=%b\n",
     io.prefetch_req.valid, io.prefetch_req.ready, io.prefetch_req.bits.cmd, io.prefetch_req.bits.addr, io.prefetch_req.bits.client_id)
