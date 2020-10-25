@@ -226,6 +226,7 @@ class MissEntry(edge: TLEdgeOut) extends DCacheModule
           // normal read
           // read hit, no need to update meta
           new_state := s_send_resp
+          new_coh := old_coh
         } .otherwise {
           assert(isWrite(req.cmd))
           new_coh     := coh_on_hit
@@ -405,6 +406,7 @@ class MissEntry(edge: TLEdgeOut) extends DCacheModule
     io.finish.ready := true.B
     when (io.finish.fire()) {
       state := s_invalid
+      new_coh := ClientMetadata.onReset
     }
   }
 }
