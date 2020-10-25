@@ -57,6 +57,11 @@ class MissEntry(edge: TLEdgeOut) extends DCacheModule
 
     val wb_req      = DecoupledIO(new WritebackReq(edge.bundle.sourceBits))
     val wb_resp     = Input(Bool())
+
+    // watch prober's write back requests
+    val probe_wb_req = Flipped(ValidIO(new WritebackReq(edge.bundle.sourceBits)))
+
+    val probe_active = Flipped(ValidIO(UInt()))
   })
 
   // MSHR:
@@ -67,7 +72,7 @@ class MissEntry(edge: TLEdgeOut) extends DCacheModule
   // 5. wait for client's finish
   // 6. update meta data
   // 7. done
-  val s_invalid :: s_meta_read_req :: s_meta_read_resp :: s_decide_next_state :: s_wb_req :: s_wb_resp :: s_refill_req :: s_refill_resp :: s_data_write_req :: s_mem_finish :: s_send_resp :: s_client_finish :: s_meta_write_req :: Nil = Enum(13)
+  val s_invalid :: s_meta_read_req :: s_meta_read_resp :: s_decide_next_state :: s_refill_req :: s_refill_resp :: s_mem_finish :: s_wait_probe_exit :: s_send_resp :: s_wb_req :: s_wb_resp :: s_data_write_req :: s_meta_write_req :: s_client_finish :: Nil = Enum(14)
 
   val state = RegInit(s_invalid)
 
@@ -239,12 +244,9 @@ class MissEntry(edge: TLEdgeOut) extends DCacheModule
     } .otherwise { // refill and writeback if necessary
       new_coh     := ClientMetadata.onReset
       should_refill_data := true.B
-      when (needs_wb) {
-        new_state   := s_wb_req
-        needs_writeback := true.B
-      } .otherwise {
-        new_state   := s_refill_req
-      }
+      needs_writeback := needs_wb
+      // refill first to decrease load miss penalty
+      new_state   := s_refill_req
     }
     new_state
   }
@@ -272,7 +274,7 @@ class MissEntry(edge: TLEdgeOut) extends DCacheModule
 
   when (state === s_wb_resp) {
     when (io.wb_resp) {
-      state := s_refill_req
+      state := s_data_write_req
     }
   }
 
@@ -333,20 +335,68 @@ class MissEntry(edge: TLEdgeOut) extends DCacheModule
 
     when (io.mem_finish.fire()) {
       grantack.valid := false.B
+      state := s_wait_probe_exit
+    }
+  }
 
+  when (state === s_wait_probe_exit) {
+    // we only wait for probe, when prober is manipulating our set
+    val should_wait_for_probe_exit = io.probe_active.valid && io.probe_active.bits === req_idx
+    when (!should_wait_for_probe_exit) {
       // no data
-      when (!should_refill_data) {
-        state := s_meta_write_req
+      when (early_response) {
+        // load miss respond right after finishing tilelink transactions
+        assert(should_refill_data)
+        state := s_send_resp
       } .otherwise {
-        when (early_response) {
-          state := s_send_resp
+        // if we do not do early respond
+        // we must be a write
+        when (needs_writeback) {
+          // write back data
+          assert(should_refill_data)
+          state := s_wb_req
         } .otherwise {
-          state := s_data_write_req
+          // no need to write back
+          when (should_refill_data) {
+            // fill data into dcache
+            state := s_data_write_req
+          } otherwise {
+            // just got permission, no need to fill data into dcache
+            state := s_meta_write_req
+          }
         }
       }
     }
   }
 
+
+  // during refill, probe may step in, it may release our blocks
+  // if it releases the block we are trying to acquire, we don't care, since we will get it back eventually
+  // but we need to know whether it releases the block we are trying to evict
+  val prober_writeback_our_block = (state === s_refill_req || state === s_refill_resp ||
+    state === s_mem_finish || state === s_wait_probe_exit || state === s_send_resp || state === s_wb_req) &&
+    io.probe_wb_req.valid && !io.probe_wb_req.bits.voluntary &&
+    io.probe_wb_req.bits.tag === req_old_meta.tag &&
+    io.probe_wb_req.bits.idx === req_idx &&
+    io.probe_wb_req.bits.way_en === req_way_en &&
+    needs_writeback
+
+  def onShrink(param: UInt): ClientMetadata = {
+    import freechips.rocketchip.tilelink.ClientStates._
+    import freechips.rocketchip.tilelink.TLPermissions._
+    val state = MuxLookup(param, Nothing, Seq(
+      TtoB   -> Branch,
+      TtoN   -> Nothing,
+      BtoN   -> Nothing))
+    ClientMetadata(state)
+  }
+
+  when (prober_writeback_our_block) {
+    req_old_meta.coh := onShrink(io.probe_wb_req.bits.param)
+  }
+
+  // --------------------------------------------
+  // data write
   when (state === s_data_write_req) {
     io.refill.valid        := true.B
     io.refill.bits.addr    := req_block_addr
@@ -393,9 +443,15 @@ class MissEntry(edge: TLEdgeOut) extends DCacheModule
       assert(is_hit, "We still don't have permissions for this block")
       assert(new_coh === coh_on_hit, "Incorrect coherence meta data")
 
-      // for read, we will write data later
+      // read miss
       when (early_response && should_refill_data) {
-        state := s_data_write_req
+        when (needs_writeback) {
+          // write back data later
+          state := s_wb_req
+        } .otherwise {
+          // for read, we will write data later
+          state := s_data_write_req
+        }
       } .otherwise {
         state := s_client_finish
       }
@@ -430,6 +486,9 @@ class MissQueue(edge: TLEdgeOut) extends DCacheModule with HasTLDump
 
     val wb_req      = Decoupled(new WritebackReq(edge.bundle.sourceBits))
     val wb_resp     = Input(Bool())
+
+    val probe_wb_req = Flipped(ValidIO(new WritebackReq(edge.bundle.sourceBits)))
+    val probe_active = Flipped(ValidIO(UInt()))
 
     val inflight_req_idxes       = Output(Vec(cfg.nMissEntries, Valid(UInt())))
     val inflight_req_block_addrs = Output(Vec(cfg.nMissEntries, Valid(UInt())))
@@ -481,6 +540,8 @@ class MissQueue(edge: TLEdgeOut) extends DCacheModule with HasTLDump
 
     wb_req_arb.io.in(i)     <>  entry.io.wb_req
     entry.io.wb_resp        :=  io.wb_resp
+    entry.io.probe_wb_req   <>  io.probe_wb_req
+    entry.io.probe_active   <>  io.probe_active
 
     entry.io.mem_grant.valid := false.B
     entry.io.mem_grant.bits  := DontCare

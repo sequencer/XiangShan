@@ -596,10 +596,23 @@ class CSR extends FunctionUnit(csrCfg) with HasCSRConst{
 
   // mtval write logic
   val lsroqExceptionAddr = WireInit(0.U(VAddrBits.W))
+  if(EnableUnifiedLSQ){
+    ExcitingUtils.addSource(io.exception.bits.lsroqIdx, "EXECPTION_LSROQIDX")
+    ExcitingUtils.addSink(lsroqExceptionAddr, "EXECPTION_VADDR")
+  } else {
+    val lsIdx = WireInit(0.U.asTypeOf(new LSIdx()))
+    lsIdx.lqIdx := io.exception.bits.lqIdx
+    lsIdx.sqIdx := io.exception.bits.sqIdx
+    ExcitingUtils.addSource(lsIdx, "EXECPTION_LSROQIDX")
+    val lqExceptionAddr = WireInit(0.U(VAddrBits.W))
+    val sqExceptionAddr = WireInit(0.U(VAddrBits.W))
+    ExcitingUtils.addSink(lqExceptionAddr, "EXECPTION_LOAD_VADDR")
+    ExcitingUtils.addSink(sqExceptionAddr, "EXECPTION_STORE_VADDR")
+    lsroqExceptionAddr := Mux(CommitType.lsInstIsStore(io.exception.bits.ctrl.commitType), sqExceptionAddr, lqExceptionAddr)
+  }
+
   val atomExceptionAddr = WireInit(0.U(VAddrBits.W))
   val atomOverrideXtval = WireInit(false.B)
-  ExcitingUtils.addSource(io.exception.bits.lsroqIdx, "EXECPTION_LSROQIDX")
-  ExcitingUtils.addSink(lsroqExceptionAddr, "EXECPTION_VADDR")
   ExcitingUtils.addSink(atomExceptionAddr, "ATOM_EXECPTION_VADDR")
   ExcitingUtils.addSink(atomOverrideXtval, "ATOM_OVERRIDE_XTVAL")
   val memExceptionAddr = Mux(atomOverrideXtval, atomExceptionAddr, lsroqExceptionAddr)
@@ -805,10 +818,10 @@ class CSR extends FunctionUnit(csrCfg) with HasCSRConst{
     "PtwReqCnt"   -> (0xb23, "perfCntPtwReqCnt"       ),
     "PtwCycleCnt" -> (0xb24, "perfCntPtwCycleCnt"     ),
     "PtwL2TlbHit" -> (0xb25, "perfCntPtwL2TlbHit"     ),
-    "CacheLoadMiss0" -> (0xb26, "perfCntDCacheLoadMiss0"  ),
-    "CacheLoadMiss1" -> (0xb27, "perfCntDCacheLoadMiss1"  ),
-    "CacheStoreMiss0" -> (0xb28, "perfCntDCacheStoreMiss0"),
-    "CacheStoreMiss1" -> (0xb29, "perfCntDCacheStoreMiss1"),
+    // "CacheLoadMiss0" -> (0xb26, "perfCntDCacheLoadMiss0"  ),
+    // "CacheLoadMiss1" -> (0xb27, "perfCntDCacheLoadMiss1"  ),
+    // "CacheStoreMiss0" -> (0xb28, "perfCntDCacheStoreMiss0"),
+    // "CacheStoreMiss1" -> (0xb29, "perfCntDCacheStoreMiss1"),
     "ITlbReqCnt0" -> (0xb2a, "perfCntItlbReqCnt0"     ),
     "ITlbMissCnt0"-> (0xb2b, "perfCntItlbMissCnt0"    ),
     "ICacheReq"   -> (0xb2d, "perfCntIcacheReqCnt"     ),
