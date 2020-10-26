@@ -23,6 +23,18 @@ class PrefetcherIO extends PrefetcherBundle {
   val prefetch_finish = DecoupledIO(new MissFinish)
 }
 
+class FakePrefetcher extends PrefetcherModule {
+  val io = IO(new PrefetcherIO)
+
+  io.prefetch_req.valid := false.B
+  io.prefetch_req.bits := DontCare
+  io.prefetch_resp.ready := true.B
+  io.prefetch_finish.valid := false.B
+  io.prefetch_finish.bits := DontCare
+
+  assert(!io.prefetch_resp.fire(), "Fake prefetcher should not receive resp!")
+}
+
 class NextLinePrefetcher extends PrefetcherModule {
   val io = IO(new PrefetcherIO)
 

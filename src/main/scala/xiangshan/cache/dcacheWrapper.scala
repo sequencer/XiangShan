@@ -131,7 +131,7 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
   val storeMissQueue = Module(new StoreMissQueue)
   val atomicsMissQueue = Module(new AtomicsMissQueue)
   // val prefetcher = Seq.fill(nClientMissQueues) { Module(new NextLinePrefetcher) }
-  val prefetcher = Module(new StreamPrefetcher)
+  val prefetcher = if (EnableDPrefetcher) Module(new StreamPrefetcher) else Module(new FakePrefetcher)
   val missQueue = Module(new MissQueue(edge))
   val wb = Module(new WritebackUnit(edge))
   val prober = Module(new ProbeUnit(edge))
