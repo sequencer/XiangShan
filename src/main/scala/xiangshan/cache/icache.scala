@@ -38,6 +38,8 @@ trait HasICacheParameters extends HasL1CacheParameters {
 
   // the width of inner CPU data interface
   def cacheID = 0
+  def prefetcherID = 1
+  def nClients = 2 // icache and prefetcher
   // RVC instruction length
   def RVCInsLen = 16
 
@@ -45,6 +47,14 @@ trait HasICacheParameters extends HasL1CacheParameters {
   def nMSHRs = 2
   val groupAlign = log2Up(FetchWidth * 4 * 2)
   def groupPC(pc: UInt): UInt = Cat(pc(PAddrBits-1, groupAlign), 0.U(groupAlign.W))
+
+  def iClientIdWidth = 3
+  def iClientMissQueueEntryIdWidth = 3
+  def iMissQueueClientIdWidth = iClientIdWidth + iClientMissQueueEntryIdWidth
+  def iClientMSB = iMissQueueClientIdWidth - 1
+  def iClientLSB = iClientMissQueueEntryIdWidth
+  def iEntryMSB = iClientMissQueueEntryIdWidth - 1
+  def iEntryLSB = 0
 
   // ICache MSHR settings
 
@@ -275,14 +285,18 @@ class ICacheImp(outer: ICache) extends ICacheModule(outer)
   //ICache MissQueue
   val icacheMissQueue = Module(new IcacheMissQueue(edge))
   val blocking = RegInit(false.B)
-  val isICacheResp = icacheMissQueue.io.resp.valid && icacheMissQueue.io.resp.bits.clientID === cacheID.U(2.W)
-  icacheMissQueue.io.req.valid := s3_miss && (io.flush === 0.U) && !blocking//TODO: specificate flush condition
-  icacheMissQueue.io.req.bits.apply(missAddr=s3_tlb_resp.paddr,missWaymask=s3_wayMask,source=cacheID.U(2.W))
-  icacheMissQueue.io.resp.ready := io.resp.ready
+  // val isICacheResp = icacheMissQueue.io.resp.valid && icacheMissQueue.io.resp.bits.clientID(iClientMSB, iClientLSB) === cacheID.U
+  val icacheMissReq = Wire(Decoupled(new IcacheMissReq))
+  val icacheMissResp = Wire(Decoupled(new IcacheMissResp))
+  val isICacheResp = icacheMissResp.valid
+  icacheMissReq.valid := s3_miss && (io.flush === 0.U) && !blocking//TODO: specificate flush condition
+  icacheMissReq.bits.apply(missAddr=s3_tlb_resp.paddr, missWaymask=s3_wayMask, source=Cat(cacheID.U(iClientIdWidth.W), 0.U(iClientMissQueueEntryIdWidth.W)))
+  icacheMissResp.ready := io.resp.ready
   icacheMissQueue.io.flush := io.flush(1)
 
-  when(icacheMissQueue.io.req.fire()){blocking := true.B}
-  .elsewhen(icacheMissQueue.io.resp.fire() && isICacheResp){blocking := false.B}
+  when(icacheMissReq.fire()){blocking := true.B}
+  // .elsewhen(icacheMissResp.fire() && isICacheResp){blocking := false.B}
+  .elsewhen (icacheMissResp.fire()) { blocking := false.B }
 
   //cache flush register
   val icacheFlush = WireInit(false.B)
@@ -292,7 +306,38 @@ class ICacheImp(outer: ICache) extends ICacheModule(outer)
   when(icacheFlush && blocking && !isICacheResp){ cacheflushed := true.B}
   .elsewhen(isICacheResp && cacheflushed) {cacheflushed := false.B }
 
-  //TODO: Prefetcher
+  // Prefetcher
+  val req = Wire(Decoupled(new IcacheMissReq))
+  val prefetch_req = Wire(Decoupled(new IcacheMissReq))
+  val prefetch_resp = Wire(Decoupled(new IcacheMissResp)) // TODO: assign this!!!
+
+  // use both miss and hit request to train stream buffer
+  req.valid := icacheMissReq.fire() || s3_valid && s3_hit && io.resp.fire()// use both miss and hit request to train stream buffer
+  req.bits := icacheMissReq.bits
+
+  // prefetch_req <> ICachePrefetcher(req, prefetch_resp, EnableIPrefetcher)
+  val icachePrefetcher = Module(new ICachePrefetcher(enable = EnableIPrefetcher))
+  icachePrefetcher.io.req <> req
+  prefetch_req <> icachePrefetcher.io.prefetch_req
+  icachePrefetcher.io.prefetch_resp <> prefetch_resp
+
+
+  // miss req & resp arb for icache and prefetcher
+  val missReqArb = Module(new Arbiter(new IcacheMissReq, nClients))
+  missReqArb.io.in(0) <> icacheMissReq
+  missReqArb.io.in(1) <> prefetch_req
+  missReqArb.io.in(1).bits.client_id := Cat(prefetcherID.U(iClientIdWidth.W), prefetch_req.bits.client_id(iEntryMSB, iEntryLSB))
+
+  icacheMissQueue.io.req <> missReqArb.io.out
+
+  icacheMissResp.valid := icacheMissQueue.io.resp.valid && icacheMissQueue.io.resp.bits.client_id(iClientMSB, iClientLSB) === cacheID.U
+  icacheMissResp.bits := icacheMissQueue.io.resp.bits
+
+  prefetch_resp.valid := icacheMissQueue.io.resp.valid && icacheMissQueue.io.resp.bits.client_id(iClientMSB, iClientLSB) === prefetcherID.U
+  prefetch_resp.bits := icacheMissQueue.io.resp.bits
+  prefetch_resp.bits.client_id := Cat(0.U(iClientIdWidth.W), icacheMissQueue.io.resp.bits.client_id(iEntryMSB, iEntryLSB))
+
+
 
   //refill write
   //meta
@@ -326,10 +371,10 @@ class ICacheImp(outer: ICache) extends ICacheModule(outer)
   //icache flush: only flush valid Array register
   when(icacheFlush){ validArray := 0.U }
 
-  val refillDataVec = icacheMissQueue.io.resp.bits.data.asTypeOf(Vec(blockWords,UInt(wordBits.W)))
+  val refillDataVec = icacheMissResp.bits.data.asTypeOf(Vec(blockWords,UInt(wordBits.W)))
   val refillDataOut = cutHelper(refillDataVec, s3_req_pc(5,1),s3_req_mask )
 
-  s3_ready := ((io.resp.fire() || !s3_valid) && !blocking) || (blocking && icacheMissQueue.io.resp.valid)
+  s3_ready := ((io.resp.fire() || !s3_valid) && !blocking) || (blocking && icacheMissResp.valid)
 
   //TODO: coherence
   XSDebug("[Stage 3] valid:%d   pc: 0x%x  mask: %b ipf:%d\n",s3_valid,s3_req_pc,s3_req_mask,s3_tlb_resp.excp.pf.instr)
@@ -353,7 +398,7 @@ class ICacheImp(outer: ICache) extends ICacheModule(outer)
   io.req.ready := metaArray.io.r.req.ready && ParallelOR(dataArrayReadyVec) && s2_ready
   
   //icache response: to pre-decoder
-  io.resp.valid := s3_valid && (s3_hit || icacheMissQueue.io.resp.valid)
+  io.resp.valid := s3_valid && (s3_hit || icacheMissResp.valid)
   io.resp.bits.data := Mux((s3_valid && s3_hit),outPacket,refillDataOut)
   io.resp.bits.mask := s3_req_mask
   io.resp.bits.pc := s3_req_pc

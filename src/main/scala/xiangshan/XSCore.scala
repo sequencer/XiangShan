@@ -36,7 +36,7 @@ case class XSCoreParameters
   EnableLB: Boolean = false,
   EnableLoop: Boolean = false,
   EnableDPrefetcher: Boolean = false,
-  EnableIPrefetcher: Boolean = false,
+  EnableIPrefetcher: Boolean = true,
   HistoryLength: Int = 64,
   BtbSize: Int = 2048,
   JbtacSize: Int = 1024,

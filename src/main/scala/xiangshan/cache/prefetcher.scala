@@ -12,9 +12,15 @@ trait HasPrefetcherConst {
   val ageWidth = 4
 }
 
-abstract class PrefetcherModule extends DCacheModule with HasPrefetcherConst
-abstract class PrefetcherBundle extends DCacheBundle with HasPrefetcherConst
-
+// abstract class PrefetcherModule extends DCacheModule with HasPrefetcherConst
+// abstract class PrefetcherBundle extends DCacheBundle with HasPrefetcherConst
+abstract class PrefetcherModule extends L1CacheModule
+  with HasDCacheParameters
+  with HasPrefetcherConst
+abstract class PrefetcherBundle extends L1CacheBundle
+  with HasDCacheParameters
+  with HasPrefetcherConst
+  
 class PrefetcherIO extends PrefetcherBundle {
   val req = Flipped(ValidIO(new MissReq))
 
@@ -375,4 +381,66 @@ class StreamPrefetcher extends PrefetcherModule {
 
   XSDebug(reqLatch.valid, "reqLatch: cmd=%x addr=0x%x client_id=%b allocNewStream=%d\n", reqLatch.bits.cmd, reqLatch.bits.addr, reqLatch.bits.client_id, allocNewStream)
 
+}
+
+// object ICachePrefetcher {
+//   def apply(req: DecoupledIO[IcacheMissReq], prefetch_resp: DecoupledIO[IcacheMissResp], enable: Boolean) = {
+//     val prefetcher = if (enable) Module(new StreamPrefetcher) else Module(new FakePrefetcher)
+//     val prefetch_req = Wire(Decoupled(new IcacheMissReq))
+
+//     req.ready := true.B
+//     prefetcher.io.req.valid := req.fire()
+//     prefetcher.io.req.bits := DontCare
+//     prefetcher.io.req.bits.cmd := MemoryOpConstants.M_XRD
+//     prefetcher.io.req.bits.addr := req.bits.addr
+
+//     prefetch_req.valid := prefetcher.io.prefetch_req.valid
+//     prefetch_req.bits := DontCare
+//     prefetch_req.bits.addr := prefetcher.io.prefetch_req.bits.addr
+//     prefetch_req.bits.waymask := -1.S.asUInt
+//     prefetch_req.bits.client_id := prefetcher.io.prefetch_req.bits.client_id
+//     prefetcher.io.prefetch_req.ready := prefetch_req.ready
+
+//     prefetcher.io.prefetch_resp.valid := prefetch_resp.valid
+//     prefetcher.io.prefetch_resp.bits := DontCare
+//     prefetcher.io.prefetch_resp.bits.client_id := prefetch_resp.bits.client_id
+//     // TODO: prefetcher.io.prefetch_resp.bits.data
+//     prefetch_resp.ready := prefetcher.io.prefetch_resp.ready
+
+//     prefetcher.io.prefetch_finish.ready := true.B
+
+//     prefetch_req
+//   }
+// }
+
+class ICachePrefetcher(enable: Boolean) extends PrefetcherModule {
+  val io = IO(new Bundle {
+    val req = Flipped(DecoupledIO(new IcacheMissReq))
+
+    val prefetch_req = DecoupledIO(new IcacheMissReq)
+    val prefetch_resp = Flipped(Decoupled(new IcacheMissResp))
+  })
+
+  val prefetcher = if (enable) Module(new StreamPrefetcher) else Module(new FakePrefetcher)
+
+  io.req.ready := true.B
+  prefetcher.io.req.valid := io.req.fire()
+  prefetcher.io.req.bits := DontCare
+  prefetcher.io.req.bits.cmd := M_XRD
+  prefetcher.io.req.bits.addr := io.req.bits.addr
+
+  io.prefetch_req.valid := prefetcher.io.prefetch_req.valid
+  io.prefetch_req.bits := DontCare
+  io.prefetch_req.bits.addr := prefetcher.io.prefetch_req.bits.addr
+  io.prefetch_req.bits.waymask := -1.S.asUInt
+  io.prefetch_req.bits.client_id := prefetcher.io.prefetch_req.bits.client_id
+  prefetcher.io.prefetch_req.ready := io.prefetch_req.ready
+
+  prefetcher.io.prefetch_resp.valid := io.prefetch_resp.valid
+  prefetcher.io.prefetch_resp.bits := DontCare
+  prefetcher.io.prefetch_resp.bits.client_id := io.prefetch_resp.bits.client_id
+  // TODO: prefetcher.io.prefetch_resp.bits.data
+  io.prefetch_resp.ready := prefetcher.io.prefetch_resp.ready
+
+  prefetcher.io.prefetch_finish.ready := true.B
 }
