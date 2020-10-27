@@ -443,8 +443,9 @@ class DCacheImp(outer: DCache) extends LazyModuleImp(outer) with HasDCacheParame
 
   // prefetcher(2).io.req.valid := atomicsMissReq.valid
   // prefetcher(2).io.req.bits := atomicsMissReq.bits
-  prefetcher.io.req.valid := loadMissReq.valid
-  prefetcher.io.req.bits := loadMissReq.bits
+  prefetcher.io.in.valid := loadMissReq.valid
+  prefetcher.io.in.bits.miss := true.B
+  prefetcher.io.in.bits.req := loadMissReq.bits
 
   // sync with prober
   missQueue.io.probe_wb_req.valid := prober.io.wb_req.fire()

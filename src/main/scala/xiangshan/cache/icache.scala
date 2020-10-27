@@ -308,17 +308,14 @@ class ICacheImp(outer: ICache) extends ICacheModule(outer)
   .elsewhen(isICacheResp && cacheflushed) {cacheflushed := false.B }
 
   // Prefetcher
-  val req = Wire(Decoupled(new IcacheMissReq))
   val prefetch_req = Wire(Decoupled(new IcacheMissReq))
-  val prefetch_resp = Wire(Decoupled(new IcacheMissResp)) // TODO: assign this!!!
+  val prefetch_resp = Wire(Decoupled(new IcacheMissResp))
 
-  // use both miss and hit request to train stream buffer
-  req.valid := icacheMissReq.fire() || s3_valid && s3_hit && io.resp.fire()// use both miss and hit request to train stream buffer
-  req.bits := icacheMissReq.bits
 
-  // prefetch_req <> ICachePrefetcher(req, prefetch_resp, EnableIPrefetcher)
   val icachePrefetcher = Module(new ICachePrefetcher(enable = EnableIPrefetcher))
-  icachePrefetcher.io.req <> req
+  icachePrefetcher.io.in.valid := icacheMissReq.fire() || s3_valid && s3_hit && io.resp.fire()// use both miss and hit request to train stream buffer
+  icachePrefetcher.io.in.bits.miss := icacheMissReq.fire()
+  icachePrefetcher.io.in.bits.req := icacheMissReq.bits
   prefetch_req <> icachePrefetcher.io.prefetch_req
   icachePrefetcher.io.prefetch_resp <> prefetch_resp
 
