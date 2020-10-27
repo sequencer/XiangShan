@@ -335,7 +335,9 @@ class ICacheImp(outer: ICache) extends ICacheModule(outer)
   prefetch_resp.bits := icacheMissQueue.io.resp.bits
   prefetch_resp.bits.client_id := Cat(0.U(iClientIdWidth.W), icacheMissQueue.io.resp.bits.client_id(iEntryMSB, iEntryLSB))
 
-  icacheMissQueue.io.resp.ready := icacheMissResp.ready || prefetch_resp.ready
+  // icacheMissQueue.io.resp.ready := icacheMissResp.ready || prefetch_resp.ready
+  icacheMissQueue.io.resp.ready := icacheMissQueue.io.resp.bits.client_id(iClientMSB, iClientLSB) === cacheID.U && icacheMissResp.ready ||
+                                   icacheMissQueue.io.resp.bits.client_id(iClientMSB, iClientLSB) === prefetcherID.U && prefetch_resp.ready
 
 
 
