@@ -150,7 +150,8 @@ class ICache()(implicit p: Parameters) extends LazyModule
 {
   val clientParameters = TLMasterPortParameters.v1(
     Seq(TLMasterParameters.v1(
-      name = "icache"))
+      name = "icache",
+      sourceId = IdRange(0, nMSHRs)))
   )
   val clientNode = TLClientNode(Seq(clientParameters))
   lazy val module = new ICacheImp(this)
@@ -336,6 +337,8 @@ class ICacheImp(outer: ICache) extends ICacheModule(outer)
   prefetch_resp.valid := icacheMissQueue.io.resp.valid && icacheMissQueue.io.resp.bits.client_id(iClientMSB, iClientLSB) === prefetcherID.U
   prefetch_resp.bits := icacheMissQueue.io.resp.bits
   prefetch_resp.bits.client_id := Cat(0.U(iClientIdWidth.W), icacheMissQueue.io.resp.bits.client_id(iEntryMSB, iEntryLSB))
+
+  icacheMissQueue.io.resp.ready := icacheMissResp.ready || prefetch_resp.ready
 
 
 
