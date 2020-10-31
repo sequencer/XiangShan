@@ -296,17 +296,14 @@ class ICacheImp(outer: ICache) extends ICacheModule(outer)
 
   //refill write
   //meta
-  val metaWrite = Wire(new ICacheMetaBundle)
-  val wayNum = OHToUInt(s3_wayMask.asTypeOf(Vec(nWays,Bool())))
-  val validPtr = Cat(get_idx(s3_req_pc),wayNum)
   val metaWriteReq = icacheMissQueue.io.meta_write.bits
   icacheMissQueue.io.meta_write.ready := true.B
-  //metaWrite.tag := get_tag(s3_req_pc)     
-  metaWrite.tag := s3_tag
   metaArray.io.w.req.valid := icacheMissQueue.io.meta_write.valid
   metaArray.io.w.req.bits.apply(data=metaWriteReq.meta_write_tag.asTypeOf(new ICacheMetaBundle), 
                                 setIdx=metaWriteReq.meta_write_idx, waymask=metaWriteReq.meta_write_waymask)
 
+  val wayNum = OHToUInt(metaWriteReq.meta_write_waymask.asTypeOf(Vec(nWays,Bool())))
+  val validPtr = Cat(metaWriteReq.meta_write_idx,wayNum)
   when(icacheMissQueue.io.meta_write.valid && !cacheflushed){
     validArray := validArray.bitSet(validPtr, true.B)
   }
