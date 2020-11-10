@@ -258,30 +258,30 @@ class Brq extends XSModule with HasCircularQueuePtrHelper {
 
   XSInfo(debug_brq_redirect, p"brq redirect, target:${Hexadecimal(io.redirect.bits.target)}\n")
 
-  val fire = io.out.fire()
-  val predRight = fire && !commitIsMisPred
-  val predWrong = fire && commitIsMisPred
-  // val isBType = commitEntry.exuOut.brUpdate.btbType===BTBtype.B
-  val isBType = commitEntry.exuOut.brUpdate.pd.isBr
-  // val isJType = commitEntry.exuOut.brUpdate.btbType===BTBtype.J
-  val isJType = commitEntry.exuOut.brUpdate.pd.isJal
-  // val isIType = commitEntry.exuOut.brUpdate.btbType===BTBtype.I
-  val isIType = commitEntry.exuOut.brUpdate.pd.isJalr
-  // val isRType = commitEntry.exuOut.brUpdate.btbType===BTBtype.R
-  val isRType = commitEntry.exuOut.brUpdate.pd.isRet
-  val mbpInstr = fire
-  val mbpRight = predRight
-  val mbpWrong = predWrong
-  val mbpBRight = predRight && isBType
-  val mbpBWrong = predWrong && isBType
-  val mbpJRight = predRight && isJType
-  val mbpJWrong = predWrong && isJType
-  val mbpIRight = predRight && isIType
-  val mbpIWrong = predWrong && isIType
-  val mbpRRight = predRight && isRType
-  val mbpRWrong = predWrong && isRType
-
   if(!env.FPGAPlatform){
+    val fire = io.out.fire()
+    val predRight = fire && !commitIsMisPred
+    val predWrong = fire && commitIsMisPred
+    // val isBType = commitEntry.exuOut.brUpdate.btbType===BTBtype.B
+    val isBType = commitEntry.exuOut.brUpdate.pd.isBr
+    // val isJType = commitEntry.exuOut.brUpdate.btbType===BTBtype.J
+    val isJType = commitEntry.exuOut.brUpdate.pd.isJal
+    // val isIType = commitEntry.exuOut.brUpdate.btbType===BTBtype.I
+    val isIType = commitEntry.exuOut.brUpdate.pd.isJalr
+    // val isRType = commitEntry.exuOut.brUpdate.btbType===BTBtype.R
+    val isRType = commitEntry.exuOut.brUpdate.pd.isRet
+    val mbpInstr = fire
+    val mbpRight = predRight
+    val mbpWrong = predWrong
+    val mbpBRight = predRight && isBType
+    val mbpBWrong = predWrong && isBType
+    val mbpJRight = predRight && isJType
+    val mbpJWrong = predWrong && isJType
+    val mbpIRight = predRight && isIType
+    val mbpIWrong = predWrong && isIType
+    val mbpRRight = predRight && isRType
+    val mbpRWrong = predWrong && isRType
+
     ExcitingUtils.addSource(mbpInstr, "perfCntCondMbpInstr", Perf)
     ExcitingUtils.addSource(mbpRight, "perfCntCondMbpRight", Perf)
     ExcitingUtils.addSource(mbpWrong, "perfCntCondMbpWrong", Perf)

@@ -168,9 +168,14 @@ class BTB extends BasePredictor with BTBParams{
   val bankIdxInOrder = VecInit((0 until BtbBanks).map(b => (baseBankLatch +& b.U)(log2Up(BtbBanks)-1,0)))
 
 
+  dontTouch(metaRead)
+  dontTouch(bankHitWays)
+  dontTouch(bankIdxInOrder)
   for (b <- 0 until BtbBanks) {
-    val meta_entry = metaRead(bankHitWays(bankIdxInOrder(b)))(bankIdxInOrder(b))
-    val data_entry = dataRead(bankHitWays(bankIdxInOrder(b)))(bankIdxInOrder(b))
+    val meta_entry = 0.U.asTypeOf(new BtbMetaEntry)
+    val data_entry = 0.U.asTypeOf(new BtbDataEntry)
+    // val meta_entry = metaRead(bankHitWays(bankIdxInOrder(b)))(bankIdxInOrder(b))
+    // val data_entry = dataRead(bankHitWays(bankIdxInOrder(b)))(bankIdxInOrder(b))
     // Use real pc to calculate the target
     io.resp.targets(b) := Mux(data_entry.extended, edataRead, (pcLatch.asSInt + (b << 1).S + data_entry.offset).asUInt)
     io.resp.hits(b)  := bankHits(bankIdxInOrder(b))

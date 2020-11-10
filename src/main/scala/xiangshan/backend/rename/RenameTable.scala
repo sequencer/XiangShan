@@ -50,10 +50,11 @@ class RenameTable(float: Boolean) extends XSModule {
       when(w.wen){ spec_table(w.addr) := w.wdata }
     }
   }
-
-  ExcitingUtils.addSource(
-    arch_table,
-    if(float) "DEBUG_FP_ARCH_RAT" else "DEBUG_INI_ARCH_RAT",
-    ExcitingUtils.Debug
-  )
+  if (!env.FPGAPlatform) {
+    ExcitingUtils.addSource(
+      arch_table,
+      if(float) "DEBUG_FP_ARCH_RAT" else "DEBUG_INI_ARCH_RAT",
+      ExcitingUtils.Debug
+    )
+  }
 }

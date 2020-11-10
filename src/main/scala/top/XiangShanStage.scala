@@ -77,10 +77,10 @@ object XiangShanStage {
   ): AnnotationSeq = {
     (new XiangShanStage).execute(
       args,
-      annotations ++ Seq(
-        RunFirrtlTransformAnnotation(new ShowPrintTransform),
-        RunFirrtlTransformAnnotation(new PrintModuleName)
-      )
+      annotations /*++ Seq(
+        //RunFirrtlTransformAnnotation(new ShowPrintTransform),
+        //RunFirrtlTransformAnnotation(new PrintModuleName)
+      )*/
     )
   }
 }
