@@ -668,11 +668,11 @@ class CSR extends FunctionUnit(FuConfig(
   val raiseExceptionVec = exception.bits.cf.exceptionVec.asUInt()
   val exceptionNO = ExcPriority.foldRight(0.U)((i: Int, sum: UInt) => Mux(raiseExceptionVec(i), i.U, sum))
   val causeNO = (raiseIntr << (XLEN-1)).asUInt() | Mux(raiseIntr, intrNO, exceptionNO)
-  // if (!env.FPGAPlatform) {
+  if (!env.FPGAPlatform) {
     val difftestIntrNO = Mux(raiseIntr, causeNO, 0.U)
     ExcitingUtils.addSource(difftestIntrNO, "difftestIntrNOfromCSR")
     ExcitingUtils.addSource(causeNO, "difftestCausefromCSR")
-  // }
+  }
 
   val raiseExceptionIntr = exception.valid
   val retTarget = Wire(UInt(VAddrBits.W))

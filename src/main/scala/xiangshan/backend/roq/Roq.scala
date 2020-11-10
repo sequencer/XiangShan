@@ -341,12 +341,13 @@ class Roq extends XSModule with HasCircularQueuePtrHelper {
     if(i % 4 == 3) XSDebug(false, true.B, "\n")
   }
   
-  val difftestIntrNO = WireInit(0.U(XLEN.W))
-  val difftestCause = WireInit(0.U(XLEN.W))
-  ExcitingUtils.addSink(difftestIntrNO, "difftestIntrNOfromCSR")
-  ExcitingUtils.addSink(difftestCause, "difftestCausefromCSR")
+  
   
   if(!env.FPGAPlatform){ 
+    val difftestIntrNO = WireInit(0.U(XLEN.W))
+    val difftestCause = WireInit(0.U(XLEN.W))
+    ExcitingUtils.addSink(difftestIntrNO, "difftestIntrNOfromCSR")
+    ExcitingUtils.addSink(difftestCause, "difftestCausefromCSR")
 
     //difftest signals
     val firstValidCommit = deqPtr + PriorityMux(validCommit, VecInit(List.tabulate(CommitWidth)(_.U)))
